@@ -80,8 +80,7 @@ def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, head
     try:
         # Check current header
         range_to_check = f"{sheet_name}!1:1"
-        result = service.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id, range=range_to_check).execute()
+        result = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_check).execute()
         current_header = result.get('values', [[]])[0]
 
         if current_header != header_values:
@@ -202,17 +201,9 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         else:
             list_after_min_filter = []
             if min_moq is not None:
-                # Find the highest startQuantity that is <= min_moq
-                relevant_start_quantities_for_min = [
-                    tier['startQuantity'] for tier in parsed_price_ranges 
-                    if tier['startQuantity'] <= min_moq
-                ]
-                effective_min_start_quantity = 0 
-                if relevant_start_quantities_for_min:
-                    effective_min_start_quantity = max(relevant_start_quantities_for_min)
-                
+                # Only include tiers that start at or after min_moq
                 for tier in parsed_price_ranges:
-                    if tier['startQuantity'] >= effective_min_start_quantity:
+                    if tier['startQuantity'] >= min_moq:
                         list_after_min_filter.append(tier)
             else: # No min_moq filter
                 list_after_min_filter = parsed_price_ranges
