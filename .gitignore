@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# environment variables
+.env
+
+# Google Cloud service account key file
+gen-lang*.json
+
+
