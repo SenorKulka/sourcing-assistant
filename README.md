@@ -72,12 +72,8 @@ Before you begin, ensure you have the following installed:
     The project uses `pyproject.toml` to manage dependencies. `uv` can install them directly.
 
     ```bash
-    uv pip install -r requirements.txt # If you generate a requirements.txt from pyproject.toml
-    # Or, more commonly with uv and pyproject.toml:
     uv sync
     ```
-
-    (Note: If `pyproject.toml` lists dependencies directly, `uv sync` is preferred. If you maintain a `requirements.txt` in sync with `pyproject.toml`, `uv pip install -r requirements.txt` works.)
 
 4. **Set Up Environment Variables:**
     Create a `.env` file in the project root directory by copying the example:
