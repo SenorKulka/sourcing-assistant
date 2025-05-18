@@ -1,0 +1,152 @@
+# Sourcing Assistant for 1688.com
+
+This script automates fetching product information from 1688.com product URLs via the LovBuy API and uploads the structured data to a specified Google Sheet. It helps streamline the initial sourcing process by organizing product SKUs, prices, and MOQs directly into a spreadsheet.
+
+## Features
+
+* Fetches detailed product information from 1688.com (using LovBuy API).
+* Extracts product variants (SKUs), including their images, MOQs, and tiered pricing.
+* Uploads data to Google Sheets, creating a new entry for each product sourcing session.
+* Generates unique IDs for each SKU, prefixed with the date and an optional product name.
+* Formats the Google Sheet with a frozen header, bolded text, and specific column widths for better readability.
+* Calculates a placeholder profit column in the sheet.
+* Allows filtering of price tiers based on minimum (minmoq) and maximum (maxmoq) order quantities.
+
+## How It Works
+
+1. The script takes a 1688.com product URL as input.
+2. It calls the LovBuy API to retrieve the product data in JSON format.
+3. The script then processes this JSON data, extracting relevant details like product title, SKU variations, images, and price tiers.
+4. It connects to the specified Google Sheet using the Google Sheets API.
+5. The script ensures a header row is present and formatted, then appends the processed product data into new rows.
+6. Unique IDs are generated for each SKU to help track them.
+
+## Prerequisites
+
+Before you begin, ensure you have the following installed:
+
+1. **Python:** Version 3.9 or higher is recommended.
+    * **Windows:** Download from [python.org](https://www.python.org/downloads/windows/). Make sure to check "Add Python to PATH" during installation.
+    * **macOS:** Python usually comes pre-installed. You can also install it via [Homebrew](https://brew.sh/) (`brew install python`) or download from [python.org](https://www.python.org/downloads/macos/).
+    * **Linux:** Python is typically pre-installed. You can install it using your distribution's package manager (e.g., `sudo apt update && sudo apt install python3 python3-pip python3-venv`).
+
+2. **uv (Python Packaging Tool):** `uv` is a fast Python package installer and resolver, written in Rust.
+    * **Installation (macOS, Linux, Windows via WSL):**
+
+        ```bash
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        ```
+
+    * **Installation (Windows - PowerShell):**
+
+        ```powershell
+        irm https://astral.sh/uv/install.ps1 | iex
+        ```
+
+    * For other installation methods, refer to the [official `uv` documentation](https://github.com/astral-sh/uv#installation).
+
+## Setup Instructions
+
+1. **Clone the Repository:**
+
+    ```bash
+    git clone https://github.com/SenorKulka/sourcing-assistant.git
+    cd sourcing-assistant
+    ```
+
+2. **Create and Activate Virtual Environment (using `uv`):**
+    It's highly recommended to use a virtual environment to manage project dependencies.
+
+    ```bash
+    uv venv # Create a virtual environment (usually creates a .venv folder)
+    source .venv/bin/activate # On macOS/Linux
+    # For Windows (PowerShell):
+    # .\.venv\Scripts\Activate.ps1
+    # For Windows (CMD):
+    # .\.venv\Scripts\activate.bat
+    ```
+
+3. **Install Dependencies:**
+    The project uses `pyproject.toml` to manage dependencies. `uv` can install them directly.
+
+    ```bash
+    uv pip install -r requirements.txt # If you generate a requirements.txt from pyproject.toml
+    # Or, more commonly with uv and pyproject.toml:
+    uv sync
+    ```
+
+    (Note: If `pyproject.toml` lists dependencies directly, `uv sync` is preferred. If you maintain a `requirements.txt` in sync with `pyproject.toml`, `uv pip install -r requirements.txt` works.)
+
+4. **Set Up Environment Variables:**
+    Create a `.env` file in the project root directory by copying the example:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Now, edit the `.env` file with your actual credentials:
+
+    * `LOVBUY_API_KEY`: Your API key for the LovBuy service.
+        * You'll need to register at [LovBuy API](https://www.lovbuy.com/api.html) to get this.
+
+    * `GOOGLE_SHEET_ID`: The ID of the Google Sheet where data will be uploaded.
+        * You can get this from the URL of your Google Sheet: `https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit`
+
+    * `GOOGLE_APPLICATION_CREDENTIALS`: The path to your Google Cloud service account JSON key file.
+        * **How to get this:**
+            1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+            2. Create a new project or select an existing one.
+            3. Enable the **Google Sheets API** for your project (Search for "Google Sheets API" in the API Library).
+            4. Go to "Credentials" under "APIs & Services".
+            5. Click "Create Credentials" -> "Service account".
+            6. Fill in the service account details, grant it appropriate roles (e.g., "Editor" for Sheets access, or a more restrictive custom role).
+            7. After creating the service account, click on it, go to the "Keys" tab.
+            8. Click "Add Key" -> "Create new key" -> Select "JSON" and click "Create".
+            9. A JSON file will be downloaded. Save this file in your project directory (e.g., in the root or a dedicated `config` folder). **Make sure this file is listed in your `.gitignore` file to prevent committing it to version control.**
+            10. Set the `GOOGLE_APPLICATION_CREDENTIALS` in your `.env` file to the path of this JSON file (e.g., `GOOGLE_APPLICATION_CREDENTIALS=./your-service-account-key.json`).
+
+## Running the Script
+
+Once everything is set up, you can run the script from your terminal (ensure your virtual environment is activated).
+
+**Command Structure:**
+
+```bash
+uv run python main.py <1688_PRODUCT_URL> --product <PRODUCT_NAME> [--minmoq <MIN_MOQ>] [--maxmoq <MAX_MOQ>]
+```
+
+**Arguments:**
+
+* `<1688_PRODUCT_URL>`: (Positional, Required) The full URL of the 1688.com product page you want to source.
+* `--product <PRODUCT_NAME>`: (Optional, but recommended) A name or identifier for the product (e.g., "Red T-Shirt Model A", "ZokiSweater"). This is used in generating unique IDs in the Google Sheet. If not provided, IDs might be less descriptive.
+* `--minmoq <MIN_MOQ>`: (Optional, default: 130) The minimum order quantity. Price tiers starting below this MOQ will be excluded from the sheet. Example: `--minmoq 100`.
+* `--maxmoq <MAX_MOQ>`: (Optional, default: None) The maximum order quantity. Price tiers starting above this MOQ will be excluded. Example: `--maxmoq 500`.
+
+**Example Usage:**
+
+```bash
+# Basic usage with a product name
+uv run python main.py https://detail.1688.com/offer/xxxxxxxxxxxx.html --product "CoolWidget"
+
+# With MOQ filtering
+uv run python main.py https://detail.1688.com/offer/yyyyyyyyyyyy.html --product "GadgetPro" --minmoq 50 --maxmoq 1000
+```
+
+## Platform-Specific Notes
+
+* **File Paths (Windows):** When setting `GOOGLE_APPLICATION_CREDENTIALS` in `.env` on Windows, use forward slashes (e.g., `C:/Users/YourUser/Projects/sourcing-assistant/keyfile.json`) or double backslashes (e.g., `C:\Users\YourUser\Projects\sourcing-assistant\keyfile.json`). Relative paths like `./keyfile.json` should work fine if the key is in the project root.
+* **Shell Commands:** The virtual environment activation commands differ slightly between shells (bash/zsh vs. PowerShell vs. CMD). Refer to the setup section.
+
+## Troubleshooting
+
+* **`LOVBUY_API_KEY not found` / `GOOGLE_SHEET_ID not found` / `GOOGLE_APPLICATION_CREDENTIALS not found`:** Ensure your `.env` file is correctly named, located in the project root, and contains the correct keys and values.
+* **`FileNotFoundError: [Errno 2] No such file or directory: 'your-service-account-key.json'`:** Double-check the path specified in `GOOGLE_APPLICATION_CREDENTIALS` in your `.env` file. Ensure it correctly points to your downloaded JSON key file. The path can be absolute or relative to the project root.
+* **Google Sheets API Errors (HttpError 403, etc.):**
+  * Ensure the Google Sheets API is enabled in your Google Cloud Project.
+  * Verify the service account has permissions to edit the target Google Sheet. You might need to share the Google Sheet with the service account's email address (found in its details in the Google Cloud Console) giving it "Editor" access.
+* **`uv: command not found`:** Ensure `uv` was installed correctly and its installation directory is in your system's PATH.
+* **Dependency Issues:** If `uv sync` or `uv pip install` fails, check your internet connection and ensure `pyproject.toml` (or `requirements.txt`) is correctly formatted.
+
+---
+
+Happy Sourcing!
