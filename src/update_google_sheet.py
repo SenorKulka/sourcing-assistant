@@ -192,27 +192,48 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         original_price_range_list = data.get('result', {}).get('result', {}).get('productSaleInfo', {}).get('priceRangeList', []) 
         
         # Convert startQuantity to int for reliable comparison
-        parsed_price_ranges = []
+        temp_parsed_price_ranges = [] # Use a temporary list first
         for tier in original_price_range_list:
             try:
                 tier_copy = tier.copy() # Work on a copy
                 tier_copy['startQuantity'] = int(tier_copy['startQuantity'])
-                parsed_price_ranges.append(tier_copy)
+                temp_parsed_price_ranges.append(tier_copy)
             except (ValueError, TypeError, KeyError):
                 print(f"DEBUG: Skipping tier due to invalid or missing 'startQuantity': {tier}")
                 continue # Skip tiers that can't be parsed
+        
+        # Sort by startQuantity to ensure correct logic for MOQ filtering
+        # Use .get() for robustness in key access, defaulting to infinity if somehow startQuantity is missing
+        parsed_price_ranges = sorted(temp_parsed_price_ranges, key=lambda t: t.get('startQuantity', float('inf')))
 
         if not parsed_price_ranges:
             price_tiers_to_process.append({'moq': '', 'price1688': ''})
         else:
             list_after_min_filter = []
             if min_moq is not None:
-                # Only include tiers that start at or after min_moq
-                for tier in parsed_price_ranges:
-                    if tier['startQuantity'] >= min_moq:
-                        list_after_min_filter.append(tier)
+                s_active = None
+                # Find the startQuantity of the tier whose range min_moq falls into
+                for i, current_tier_data in enumerate(parsed_price_ranges):
+                    current_tier_start_val = current_tier_data['startQuantity']
+                    next_tier_start_val = parsed_price_ranges[i+1]['startQuantity'] if i + 1 < len(parsed_price_ranges) else float('inf')
+                    
+                    if current_tier_start_val <= min_moq < next_tier_start_val:
+                        s_active = current_tier_start_val
+                        break
+                
+                # If min_moq is less than the start_quantity of the very first tier,
+                # it implies all tiers are effectively accessible. The 'active' tier is the first one.
+                if s_active is None and parsed_price_ranges and min_moq < parsed_price_ranges[0]['startQuantity']:
+                    s_active = parsed_price_ranges[0]['startQuantity'] 
+                
+                if s_active is not None:
+                    for tier_data_to_filter in parsed_price_ranges:
+                        if tier_data_to_filter['startQuantity'] >= s_active:
+                            list_after_min_filter.append(tier_data_to_filter)
+                # If s_active is None at this point (e.g., min_moq is very high, beyond all tiers, or parsed_price_ranges was initially empty),
+                # list_after_min_filter will remain empty, which correctly signifies no tiers meet the criteria.
             else: # No min_moq filter
-                list_after_min_filter = parsed_price_ranges
+                list_after_min_filter = list(parsed_price_ranges) # Use a copy
 
             filtered_price_range_list_final = []
             if max_moq is not None:
