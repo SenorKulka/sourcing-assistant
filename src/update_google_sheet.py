@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+from urllib.parse import urlparse, urlunparse
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -172,6 +173,11 @@ def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, head
         raise
 
 def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_path, product_type, min_moq, max_moq, sheet_id_val, source_url):
+    # Clean the source_url to remove query parameters and fragments
+    if source_url:
+        parsed_url_obj = urlparse(source_url)
+        source_url = urlunparse(parsed_url_obj._replace(query='', fragment=''))
+
     try:
         with open(product_data_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
