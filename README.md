@@ -31,17 +31,19 @@ Before you begin, ensure you have the following installed:
     * **Linux:** Python is typically pre-installed. You can install it using your distribution's package manager (e.g., `sudo apt update && sudo apt install python3 python3-pip python3-venv`).
 
 2. **uv (Python Packaging Tool):** `uv` is a fast Python package installer and resolver, written in Rust.
-    * **Installation (macOS, Linux, Windows via WSL):**
+    * **Installation (Windows):**
+    To open PowerShell: Press Win + X and select "Windows PowerShell" or "Terminal", or search for "PowerShell" in the Start Menu.
+
+        ```powershell
+        irm https://astral.sh/uv/install.ps1 | iex
+        ```
+
+    * **Installation (macOS, Linux):**
 
         ```bash
         curl -LsSf https://astral.sh/uv/install.sh | sh
         ```
 
-    * **Installation (Windows - PowerShell):**
-
-        ```powershell
-        irm https://astral.sh/uv/install.ps1 | iex
-        ```
 
     * For other installation methods, refer to the [official `uv` documentation](https://github.com/astral-sh/uv#installation).
 
@@ -59,11 +61,11 @@ Before you begin, ensure you have the following installed:
 
     ```bash
     uv venv # Create a virtual environment (usually creates a .venv folder)
-    source .venv/bin/activate # On macOS/Linux
-    # For Windows (PowerShell):
-    # .\.venv\Scripts\Activate.ps1
-    # For Windows (CMD):
-    # .\.venv\Scripts\activate.bat
+    # On Windows (PowerShell):
+    .\.venv\Scripts\Activate.ps1
+
+    # On macOS/Linux
+    source .venv/bin/activate
     ```
 
 3. **Install Dependencies:**
