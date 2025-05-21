@@ -11,23 +11,14 @@ from googleapiclient.errors import HttpError
 load_dotenv(override=True)
 
 # Environment variables
-GOOGLE_SHEET_ID_FROM_ENV = os.getenv("GOOGLE_SHEET_ID")
+# GOOGLE_SHEET_ID_FROM_ENV = os.getenv("GOOGLE_SHEET_ID") # No longer primary source for run_sheet_update
 GOOGLE_CREDENTIALS_PATH_FROM_ENV = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-print(f"DEBUG: GOOGLE_SHEET_ID from .env (raw): {GOOGLE_SHEET_ID_FROM_ENV}")
+# print(f"DEBUG: GOOGLE_SHEET_ID from .env (raw): {{GOOGLE_SHEET_ID_FROM_ENV}}") # Commented out
 print(f"DEBUG: GOOGLE_APPLICATION_CREDENTIALS from .env (raw): {GOOGLE_CREDENTIALS_PATH_FROM_ENV}")
 
-# Process GOOGLE_SHEET_ID
-if GOOGLE_SHEET_ID_FROM_ENV and GOOGLE_SHEET_ID_FROM_ENV.startswith("https://docs.google.com/spreadsheets/d/"):
-    try:
-        GOOGLE_SHEET_ID = GOOGLE_SHEET_ID_FROM_ENV.split('/d/')[1].split('/')[0]
-        print(f"DEBUG: Parsed GOOGLE_SHEET_ID: {GOOGLE_SHEET_ID}")
-    except IndexError:
-        print(f"ERROR: Could not parse GOOGLE_SHEET_ID from URL: {GOOGLE_SHEET_ID_FROM_ENV}")
-        GOOGLE_SHEET_ID = None
-else:
-    GOOGLE_SHEET_ID = GOOGLE_SHEET_ID_FROM_ENV
-    print(f"DEBUG: Using GOOGLE_SHEET_ID as is: {GOOGLE_SHEET_ID}")
+# Global GOOGLE_SHEET_ID processing is removed as run_sheet_update will take it as a parameter.
+# GOOGLE_SHEET_ID = None # Ensuring it's not used globally by mistake.
 
 # Process GOOGLE_CREDENTIALS_PATH
 # If the path from .env starts with './', make it absolute relative to the script's directory or CWD.
@@ -54,7 +45,6 @@ def get_google_sheets_service():
     """Initializes and returns the Google Sheets API service client."""
     if not GOOGLE_CREDENTIALS_PATH:
         raise ValueError("GOOGLE_APPLICATION_CREDENTIALS environment variable not set or key file path is missing.")
-    # Check for file existence *after* path resolution
     if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
         raise FileNotFoundError(f"Google credentials file not found at: {GOOGLE_CREDENTIALS_PATH}")
     
@@ -71,9 +61,10 @@ def get_sheet_id_by_name(service, spreadsheet_id, sheet_name):
         for sheet in sheets:
             if sheet.get('properties', {}).get('title') == sheet_name:
                 return sheet.get('properties', {}).get('sheetId')
-        return None
+        print(f"Warning: Sheet named '{sheet_name}' not found in spreadsheet '{spreadsheet_id}'.")
+        return None # Return None if specific sheet not found
     except HttpError as error:
-        print(f"An API error occurred while fetching sheet metadata: {error}")
+        print(f"An API error occurred while fetching sheet metadata for spreadsheet '{spreadsheet_id}': {error}")
         raise
 
 def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, header_values):
@@ -118,8 +109,8 @@ def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, head
                         'range': {
                             'sheetId': sheet_id,
                             'dimension': 'COLUMNS',
-                            'startIndex': 0,  # Column A (0-indexed)
-                            'endIndex': 1     # Column A
+                            'startIndex': 0,  # Column A (id)
+                            'endIndex': 1
                         },
                         'properties': {'pixelSize': 200},
                         'fields': 'pixelSize'
@@ -130,19 +121,19 @@ def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, head
                         'range': {
                             'sheetId': sheet_id,
                             'dimension': 'COLUMNS',
-                            'startIndex': 1,  # Column B (0-indexed)
-                            'endIndex': 2     # Column B
+                            'startIndex': 1,  # Column B (photo)
+                            'endIndex': 2
                         },
                         'properties': {'pixelSize': 200},
                         'fields': 'pixelSize'
                     }
                 },
                 {
-                    'updateDimensionProperties': { # Set width for 'info' column (G)
+                    'updateDimensionProperties': { # info column (G)
                         'range': {
                             'sheetId': sheet_id,
                             'dimension': 'COLUMNS',
-                            'startIndex': 6, # Column G
+                            'startIndex': 6, 
                             'endIndex': 7
                         },
                         'properties': {'pixelSize': 150},
@@ -150,11 +141,11 @@ def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, head
                     }
                 },
                 {
-                    'updateDimensionProperties': { # Set width for 'link' column (H)
+                    'updateDimensionProperties': { # link column (H)
                         'range': {
                             'sheetId': sheet_id,
                             'dimension': 'COLUMNS',
-                            'startIndex': 7, # Column H
+                            'startIndex': 7, 
                             'endIndex': 8
                         },
                         'properties': {'pixelSize': 400},
@@ -169,7 +160,7 @@ def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, head
             print(f"Header already correct in '{sheet_name}'.")
 
     except HttpError as error:
-        print(f"An API error occurred during header setup: {error}")
+        print(f"An API error occurred during header setup for sheet '{sheet_name}' in spreadsheet '{spreadsheet_id}': {error}")
         raise
 
 def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_path, product_type, min_moq, max_moq, sheet_id_val, source_url):
@@ -597,50 +588,72 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         print(f"An unexpected error occurred during data processing: {e}")
         raise
 
-def run_sheet_update(product_data_path, product_type_arg, min_moq_arg, max_moq_arg, source_url_arg):
-    """Main function to orchestrate the sheet update process."""
-    print("Starting Google Sheet update process...")
-    if not GOOGLE_SHEET_ID:
-        print("Error: GOOGLE_SHEET_ID is not set. Please check your .env file or environment variables.")
-        return
+def run_sheet_update(product_data_path, product_type_arg, min_moq_arg, max_moq_arg, source_url_arg, google_sheet_id_param):
+    """Main function to orchestrate the sheet update process using a provided Google Sheet ID."""
+    
+    if not google_sheet_id_param:
+        error_msg = "Google Sheet ID is required but was not provided to run_sheet_update."
+        print(f"ERROR: {error_msg}")
+        raise ValueError(error_msg)
 
-    service = None
+    print(f"--- Starting Google Sheet Update for Sheet ID: {google_sheet_id_param} ---")
+    print(f"Product Type: {product_type_arg}, Min MOQ: {min_moq_arg}, Max MOQ: {max_moq_arg}")
+    print(f"Source URL: {source_url_arg}, Data Path: {product_data_path}")
+
     try:
         service = get_google_sheets_service()
-    except ValueError as e:
-        print(f"Error initializing Google Sheets service: {e}")
-        return
-    except Exception as e:
-        print(f"An unexpected error occurred during service initialization: {e}")
-        return
+        print("Google Sheets service initialized successfully.")
 
-    if not service:
-        print("Failed to initialize Google Sheets service. Exiting.")
-        return
+        sheet_id_val = get_sheet_id_by_name(service, google_sheet_id_param, TARGET_SHEET_NAME)
 
-    target_sheet_id_val = None
-    try:
-        # Ensure header and basic column formatting first
-        # Get the numeric sheet ID for the target sheet name
-        target_sheet_id_val = get_sheet_id_by_name(service, GOOGLE_SHEET_ID, TARGET_SHEET_NAME)
-        if target_sheet_id_val is None:
-            print(f"Error: Could not find sheet named '{TARGET_SHEET_NAME}' in spreadsheet '{GOOGLE_SHEET_ID}'.")
-            return
-        
-        ensure_header_and_freeze(service, GOOGLE_SHEET_ID, target_sheet_id_val, TARGET_SHEET_NAME, EXPECTED_HEADER)
+        if sheet_id_val is None:
+            if TARGET_SHEET_NAME:
+                print(f"Sheet named '{TARGET_SHEET_NAME}' not found in spreadsheet '{google_sheet_id_param}'. Attempting to create it.")
+                try:
+                    add_sheet_request_body = {
+                        'requests': [{
+                            'addSheet': {
+                                'properties': {
+                                    'title': TARGET_SHEET_NAME
+                                }
+                            }
+                        }]
+                    }
+                    response = service.spreadsheets().batchUpdate(spreadsheetId=google_sheet_id_param, body=add_sheet_request_body).execute()
+                    new_sheet_properties = response.get('replies')[0].get('addSheet').get('properties')
+                    sheet_id_val = new_sheet_properties.get('sheetId')
+                    print(f"Successfully created sheet '{TARGET_SHEET_NAME}' with ID: {sheet_id_val}")
+                except HttpError as error_create:
+                    err_msg = f"Failed to create sheet '{TARGET_SHEET_NAME}' in spreadsheet '{google_sheet_id_param}': {error_create}"
+                    print(f"ERROR: {err_msg}")
+                    raise ValueError(err_msg)
+            else:
+                 err_msg = f"Target sheet name ('{TARGET_SHEET_NAME}') not found in spreadsheet '{google_sheet_id_param}' and no sheet name configured to create."
+                 print(f"ERROR: {err_msg}")
+                 raise ValueError(err_msg)
 
-        # Process and upload data from the specified JSON file
-        process_and_upload_data(service, GOOGLE_SHEET_ID, TARGET_SHEET_NAME, 
-                                product_data_path, product_type_arg, 
-                                min_moq_arg, max_moq_arg, target_sheet_id_val, source_url_arg)
+        ensure_header_and_freeze(service, google_sheet_id_param, sheet_id_val, TARGET_SHEET_NAME, EXPECTED_HEADER)
+        print(f"Header check/update for sheet '{TARGET_SHEET_NAME}' (ID: {sheet_id_val}) complete.")
 
-    except HttpError as e:
-        print(f'An API error occurred in main: {e}')
-        # Further error details can be printed here if needed
-    except Exception as e:
-        print(f'An unexpected error occurred in main: {e}')
+        process_and_upload_data(service, google_sheet_id_param, TARGET_SHEET_NAME, product_data_path, product_type_arg, min_moq_arg, max_moq_arg, sheet_id_val, source_url_arg)
+        print(f"Data processing and upload for sheet '{TARGET_SHEET_NAME}' complete.")
+        print(f"--- Google Sheet Update for Sheet ID: {google_sheet_id_param} Finished Successfully ---")
+
+    except FileNotFoundError as e_fnf:
+        print(f"ERROR during sheet update (FileNotFound) for '{google_sheet_id_param}': {e_fnf}")
+        raise
+    except ValueError as e_val:
+        print(f"ERROR during sheet update (ValueError) for '{google_sheet_id_param}': {e_val}")
+        raise
+    except HttpError as e_http:
+        print(f"API ERROR during sheet update for '{google_sheet_id_param}': {e_http}")
+        print(f"Details: {e_http.content}")
+        raise
+    except Exception as e_general:
+        print(f"UNEXPECTED ERROR during sheet update for '{google_sheet_id_param}': {e_general}")
         import traceback
         traceback.print_exc()
+        raise
 
 if __name__ == '__main__':
     # This part is now more for structure; direct execution might require specific args.
@@ -655,10 +668,11 @@ if __name__ == '__main__':
     example_min_moq = None
     example_max_moq = None
     example_source_url = "https://example.com/default_product.html" # Placeholder source URL
+    example_google_sheet_id = "your_spreadsheet_id_here" # Placeholder Google Sheet ID
 
     # Check if a default product_data.json exists, otherwise skip process_and_upload
     if os.path.exists(example_product_data_path):
-        run_sheet_update(example_product_data_path, example_product_type, example_min_moq, example_max_moq, example_source_url)
+        run_sheet_update(example_product_data_path, example_product_type, example_min_moq, example_max_moq, example_source_url, example_google_sheet_id)
     else:
         print(f"Placeholder product_data.json ('{example_product_data_path}') not found.")
         print("To test sheet header creation (if sheet service works), you might need to run parts manually or ensure a dummy file.")

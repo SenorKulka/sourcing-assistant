@@ -1,83 +1,142 @@
 import os
-import argparse
 import json
 import tempfile
+import re
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify, send_from_directory
 from src.lovbuy_client import LovbuyClient
 from src.update_google_sheet import run_sheet_update
 
 load_dotenv(override=True)
 
+app = Flask(__name__, static_folder='frontend')
+
 LOVBUY_API_KEY = os.getenv("LOVBUY_API_KEY")
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-def main():
-    parser = argparse.ArgumentParser(description="Sourcing Assistant: Fetches 1688.com product data via LovBuy API and updates Google Sheets.")
-    parser.add_argument("url", type=str, metavar="URL", help="The 1688.com product URL to fetch information for.")
-    parser.add_argument("--product", type=str, required=False, help="Product identifier or name (e.g., 'T-Shirt A') used for sheet organization.")
-    parser.add_argument("--minmoq", type=int, default=130, help="Minimum MOQ to consider for pricing tiers. Filters tiers shown in the sheet.")
-    parser.add_argument("--maxmoq", type=int, default=None, help="Maximum MOQ to consider for pricing tiers. Filters tiers shown in the sheet.")
+def extract_sheet_id_from_url(url_string):
+    if not url_string:
+        return None
+    
+    match = re.search(r'/spreadsheets/d/([a-zA-Z0-9-_]+)', url_string)
+    if match:
+        return match.group(1)
+    
+    match = re.search(r'/d/([a-zA-Z0-9-_]+)', url_string)
+    if match:
+        return match.group(1)
+        
+    if re.fullmatch(r'[a-zA-Z0-9-_]{44}', url_string):
+         return url_string
+         
+    print(f"Warning: Could not parse a valid Google Sheet ID from '{url_string}'. It might be an invalid URL or ID format.")
+    return None
 
-    args = parser.parse_args()
+def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_id):
+    print(f"Sourcing Assistant Backend: Processing URL: {url} for product: {product_name}, MOQ: {min_moq}-{max_moq}, Sheet ID: {google_sheet_id}")
 
-    print(f"Sourcing Assistant: Processing URL: {args.url} for product: {args.product}")
+    # Default min_moq to 120 if not provided
+    if min_moq is None:
+        min_moq = 120
+        print(f"INFO: min_moq was not provided, defaulting to {min_moq}")
 
     if not LOVBUY_API_KEY:
-        print("Error: LOVBUY_API_KEY not found in environment variables (.env file).")
-        print("Please ensure your .env file is correctly set up with your LovBuy API key.")
-        return
+        print("Error: LOVBUY_API_KEY not found in environment variables.")
+        return {"error": "Server configuration error: LOVBUY_API_KEY not set."}, 500
 
-    if not GOOGLE_SHEET_ID:
-        print("Error: GOOGLE_SHEET_ID not found in environment variables (.env file).")
-        print("Please ensure your .env file is correctly set up with your Google Sheet ID or URL.")
-        return
+    if not google_sheet_id: 
+        print("Error: Google Sheet ID was not provided or could not be parsed.")
+        return {"error": "Client error: Google Sheet ID is missing or invalid."}, 400
 
     if not GOOGLE_APPLICATION_CREDENTIALS:
-        print("Error: GOOGLE_APPLICATION_CREDENTIALS not found in environment variables (.env file).")
-        print("Please ensure your .env file is correctly set up with the path to your Google credentials JSON file.")
-        return
+        print("Error: GOOGLE_APPLICATION_CREDENTIALS not found in environment variables.")
+        return {"error": "Server configuration error: GOOGLE_APPLICATION_CREDENTIALS not set."}, 500
 
     lovbuy = LovbuyClient(LOVBUY_API_KEY)
+    response_data = {}
+    status_code = 200
 
     try:
-        product_info = lovbuy.get_product_info_from_1688_url(args.url)
+        product_info = lovbuy.get_product_info_from_1688_url(url)
 
         if product_info:
-            print(f"\nSuccessfully fetched product data from LovBuy for URL: {args.url}")
-            # print("--- Full API Response Body (JSON) ---")
-            # print(json.dumps(product_info, indent=2, ensure_ascii=False))
-            # print("-------------------------------------")
-
-            # Create a temporary file to store the JSON data
+            print(f"Successfully fetched product data from LovBuy for URL: {url}")
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json', encoding='utf-8') as tmp_file:
                 json.dump(product_info, tmp_file, ensure_ascii=False, indent=2)
                 temp_product_data_path = tmp_file.name
             
             print(f"Product data temporarily saved to: {temp_product_data_path}")
-            print(f"Attempting to update Google Sheet... Product: {args.product}, MinMOQ: {args.minmoq}, MaxMOQ: {args.maxmoq}")
+            print(f"Attempting to update Google Sheet... Product: {product_name}, MinMOQ: {min_moq}, MaxMOQ: {max_moq}")
 
             try:
                 run_sheet_update(
                     product_data_path=temp_product_data_path,
-                    product_type_arg=args.product,
-                    min_moq_arg=args.minmoq,
-                    max_moq_arg=args.maxmoq,
-                    source_url_arg=args.url
+                    product_type_arg=product_name,
+                    min_moq_arg=min_moq,
+                    max_moq_arg=max_moq,
+                    source_url_arg=url,
+                    google_sheet_id_param=google_sheet_id
                 )
-                print("Google Sheet update process completed.")
+                message = f"Google Sheet update process completed successfully for {url} into sheet {google_sheet_id}"
+                response_data = {"message": message}
+                print(message)
             except Exception as e_sheet:
-                print(f"An error occurred during Google Sheet update: {e_sheet}")
+                error_message = f"An error occurred during Google Sheet update for {url}: {e_sheet}"
+                print(error_message)
+                response_data = {"error": error_message}
+                status_code = 500
             finally:
-                # Clean up the temporary file
                 if os.path.exists(temp_product_data_path):
                     os.remove(temp_product_data_path)
                     print(f"Temporary file {temp_product_data_path} removed.")
 
         else:
-            print(f"Failed to retrieve product information from LovBuy for URL: {args.url}")
+            error_message = f"Failed to retrieve product information from LovBuy for URL: {url}"
+            print(error_message)
+            response_data = {"error": error_message}
+            status_code = 400
+
     except Exception as e_lovbuy:
-        print(f"An error occurred while fetching product data from LovBuy: {e_lovbuy}")
+        error_message = f"An error occurred while fetching product data from LovBuy for {url}: {e_lovbuy}"
+        print(error_message)
+        response_data = {"error": error_message}
+        status_code = 500
+    
+    return response_data, status_code
+
+@app.route('/')
+def serve_index():
+    return send_from_directory(app.static_folder, 'index.html')
+
+@app.route('/api/process', methods=['POST'])
+def handle_api_process():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON payload"}), 400
+
+    url = data.get('url')
+    product_name = data.get('productName')
+    min_moq_str = data.get('minMoq')
+    max_moq_str = data.get('maxMoq')
+    gsheet_link_or_id = data.get('gsheetLink')
+
+    if not url:
+        return jsonify({"error": "Missing 'url' in request"}), 400
+    if not product_name: 
+        print("Warning: 'productName' is missing or empty in the request.")
+
+    parsed_google_sheet_id = extract_sheet_id_from_url(gsheet_link_or_id)
+    if not parsed_google_sheet_id:
+        return jsonify({"error": f"Invalid or missing Google Sheet link/ID: '{gsheet_link_or_id}'"}), 400
+
+    try:
+        min_moq = int(min_moq_str) if min_moq_str else None
+        max_moq = int(max_moq_str) if max_moq_str else None
+    except ValueError:
+        return jsonify({"error": "Invalid 'minMoq' or 'maxMoq' value. Must be an integer."}), 400
+
+    response, status = process_sourcing_request(url, product_name, min_moq, max_moq, parsed_google_sheet_id)
+    return jsonify(response), status
 
 if __name__ == "__main__":
-    main()
+    app.run(debug=True, port=5000)

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sourcing Assistant</title>
+    <style>
+        body {
+            background-image: url('https://cyber.dabamos.de/images/circuit.gif');
+            background-repeat: repeat;
+            font-family: 'Times New Roman', serif;
+            color: #0000FF;
+            margin: 20px;
+        }
+        h1 {
+            font-family: 'Comic Sans MS', cursive;
+            color: #FF00FF;
+            text-align: center;
+            background-color: #00FFFF;
+            padding: 10px;
+            border: 3px dashed #FF0000;
+        }
+        .container {
+            border: 4px groove #008000;
+            padding: 20px;
+            background-color: #FFFFFF;
+        }
+        label {
+            font-weight: bold;
+            color: #800080;
+        }
+        textarea, input[type="text"], input[type="number"] {
+            margin: 5px 0 15px 0;
+            padding: 8px;
+            border: 2px inset #FFA500;
+            font-family: 'Comic Sans MS', cursive;
+        }
+        textarea, input[type="text"] {
+            width: 100%;
+        }
+        .moq-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .moq-group input[type="number"] {
+            width: 100%;
+        }
+        button {
+            background-color: #FF4500;
+            color: white;
+            padding: 10px 20px;
+            font-family: 'Comic Sans MS', cursive;
+            font-size: 16px;
+            border: 3px outset #00008B;
+            cursor: pointer;
+        }
+        marquee {
+            color: #FF0000;
+            font-family: 'Comic Sans MS', cursive;
+            font-size: 18px;
+            margin: 10px 0;
+        }
+        .retro-badge {
+            margin-top: 20px;
+            text-align: center;
+        }
+        .retro-badge img {
+            height: 31px;
+            margin: 5px;
+        }
+        .extras {
+            text-align: center;
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Welcome to the Sourcing Assistant!</h1>
+    <marquee behavior="scroll" direction="left">Enter your links and product details below to update your pricing spreadsheet!</marquee>
+    <div class="container">
+        <form>
+            <label for="gsheet">Google Sheet link:</label><br>
+            <input type="text" id="gsheet" placeholder="https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit"><br>
+            <label for="links">Product Listing Links (one per line):</label><br>
+            <textarea id="links" rows="8" placeholder="http://example.com/listing1"></textarea><br>
+
+            <label for="product">Product Name:</label><br>
+            <input type="text" id="product" placeholder="e.g. zoki"><br>
+
+            <div class="moq-group">
+                <div style="flex: 1">
+                    <label for="minmoq">Minimum MOQ:</label><br>
+                    <input type="number" id="minmoq" min="1">
+                </div>
+                <div style="flex: 1">
+                    <label for="maxmoq">Maximum MOQ:</label><br>
+                    <input type="number" id="maxmoq" min="1">
+                </div>
+            </div>
+
+            <button type="submit">Update Google Sheet</button>
+        </form>
+        <div id="statusMessages" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc; background-color: #f9f9f9;"></div>
+    </div>
+    <div class="retro-badge">
+        <img src="https://cyber.dabamos.de/88x31/800x600.gif" alt="800x600">
+        <img src="https://cyber.dabamos.de/88x31/bestview.gif" alt="Best viewed with">
+        <img src="https://cyber.dabamos.de/88x31/built_with_amiga02.gif" alt="Built with Amiga">
+        <img src="https://cyber.dabamos.de/88x31/christnow.gif" alt="Christ Now">
+        <img src="https://cyber.dabamos.de/88x31/antinazi.gif" alt="Anti Nazi">
+    </div>
+    <marquee behavior="alternate" direction="right">Thank you for using Sourcing Assistant!</marquee>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const form = document.querySelector('form');
+            const statusMessagesDiv = document.getElementById('statusMessages');
+
+            form.addEventListener('submit', async function (event) {
+                event.preventDefault();
+                statusMessagesDiv.innerHTML = 'Processing...';
+
+                const gsheetLinkFromInput = document.getElementById('gsheet').value; // Get gsheet link
+                const productLinksText = document.getElementById('links').value;
+                const productName = document.getElementById('product').value;
+                const minMoq = document.getElementById('minmoq').value;
+                const maxMoq = document.getElementById('maxmoq').value;
+
+                if (!productLinksText.trim()) {
+                    statusMessagesDiv.innerHTML = '<p style="color: red;">Please enter at least one product listing link.</p>';
+                    return;
+                }
+
+                if (!gsheetLinkFromInput.trim()) {
+                    statusMessagesDiv.innerHTML = '<p style="color: red;">Please enter the Google Sheet link or ID.</p>';
+                    return;
+                }
+
+                const productLinks = productLinksText.trim().split('\n');
+                let resultsHTML = '';
+                let allSuccessful = true;
+
+                for (const link of productLinks) {
+                    if (!link.trim()) continue; // Skip empty lines
+
+                    statusMessagesDiv.innerHTML = `Processing ${link}...`;
+                    console.log(`Sending request for: ${link}, Product: ${productName}, MinMOQ: ${minMoq}, MaxMOQ: ${maxMoq}`);
+
+                    try {
+                        const response = await fetch('/api/process', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                url: link.trim(),
+                                productName: productName,
+                                minMoq: minMoq, // Will be parsed as int on backend
+                                maxMoq: maxMoq,  // Will be parsed as int on backend
+                                gsheetLink: gsheetLinkFromInput // Send the gsheet link
+                            }),
+                        });
+
+                        const result = await response.json();
+
+                        if (response.ok) {
+                            resultsHTML += `<p style="color: green;">Successfully processed ${link}: ${result.message || 'Done.'}</p>`;
+                        } else {
+                            resultsHTML += `<p style="color: red;">Error processing ${link}: ${result.error || 'Unknown error'}</p>`;
+                            allSuccessful = false;
+                        }
+                    } catch (error) {
+                        resultsHTML += `<p style="color: red;">Network or client-side error processing ${link}: ${error.message || 'Unknown error'}</p>`;
+                        allSuccessful = false;
+                        console.error('Fetch error:', error);
+                    }
+                }
+
+                if (allSuccessful) {
+                     resultsHTML = '<p style="color: green;">All links processed!</p>' + resultsHTML;
+                } else {
+                     resultsHTML = '<p style="color: orange;">Some links encountered issues.</p>' + resultsHTML;
+                }
+                statusMessagesDiv.innerHTML = resultsHTML;
+            });
+        });
+    </script>
+</body>
+</html>

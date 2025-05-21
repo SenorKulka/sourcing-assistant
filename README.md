@@ -34,16 +34,15 @@ Before you begin, ensure you have the following installed:
     * **Installation (Windows):**
     To open PowerShell: Press Win + X and select "Windows PowerShell" or "Terminal", or search for "PowerShell" in the Start Menu.
 
-        ```powershell
-        irm https://astral.sh/uv/install.ps1 | iex
-        ```
+    ```powershell
+    irm https://astral.sh/uv/install.ps1 | iex
+    ```
 
     * **Installation (macOS, Linux):**
 
-        ```bash
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        ```
-
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
 
     * For other installation methods, refer to the [official `uv` documentation](https://github.com/astral-sh/uv#installation).
 
@@ -89,6 +88,7 @@ Before you begin, ensure you have the following installed:
 
     * `GOOGLE_SHEET_ID`: The ID of the Google Sheet where data will be uploaded.
         * You can get this from the URL of your Google Sheet: `https://docs.google.com/spreadsheets/d/YOUR_GOOGLE_SHEET_ID/edit`
+        * **Note:** When using the web interface, the Google Sheet ID or Link entered on the page will be used, taking precedence over this `.env` value.
 
     * `GOOGLE_APPLICATION_CREDENTIALS`: The path to your Google Cloud service account JSON key file.
         * **How to get this:**
@@ -103,9 +103,39 @@ Before you begin, ensure you have the following installed:
             9. A JSON file will be downloaded. Save this file in your project directory (e.g., in the root or a dedicated `config` folder). **Make sure this file is listed in your `.gitignore` file to prevent committing it to version control.**
             10. Set the `GOOGLE_APPLICATION_CREDENTIALS` in your `.env` file to the path of this JSON file (e.g., `GOOGLE_APPLICATION_CREDENTIALS=./your-service-account-key.json`).
 
-## Running the Script
+## Running the Application
 
-Once everything is set up, you can run the script from your terminal (ensure your virtual environment is activated).
+Once everything is set up, you can run the application. Ensure your virtual environment is activated.
+
+### Using the Web Interface (Recommended)
+
+1. **Start the Flask Server:**
+
+    Open your terminal, navigate to the project directory, and run:
+
+    ```bash
+    uv run python main.py
+    ```
+
+    This will start the web application, typically on `http://127.0.0.1:5000`.
+
+2. **Access in Browser:**
+    Open your web browser and go to `http://127.0.0.1:5000`.
+
+3. **Fill in the Form:**
+    You will see a form with the following fields:
+    * **Product Link:** (Required) The full URL of the 1688.com product page.
+    * **Product Name:** (Optional) A name for the product, used in generating SKU IDs.
+    * **Min MOQ:** (Optional) Minimum order quantity. Price tiers below this will be excluded. If left empty, defaults to `120`.
+    * **Max MOQ:** (Optional) Maximum order quantity. Price tiers above this will be excluded.
+    * **Google Sheet Link/ID:** (Required) The full URL of your Google Sheet (e.g., `https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit`) or just the Google Sheet ID itself.
+
+4. **Submit:**
+    Click the "Submit" button. The backend will process the request, fetch data from LovBuy, and update your Google Sheet.
+
+### As a Command-Line Tool (Alternative)
+
+You can also run the script directly from your terminal with arguments.
 
 **Command Structure:**
 
@@ -117,7 +147,7 @@ uv run python main.py <1688_PRODUCT_URL> --product <PRODUCT_NAME> [--minmoq <MIN
 
 * `<1688_PRODUCT_URL>`: (Positional, Required) The full URL of the 1688.com product page you want to source.
 * `--product <PRODUCT_NAME>`: (Optional, but recommended) A name or identifier for the product (e.g., "Red T-Shirt Model A", "ZokiSweater"). This is used in generating unique IDs in the Google Sheet. If not provided, IDs might be less descriptive.
-* `--minmoq <MIN_MOQ>`: (Optional, default: 130) The minimum order quantity. Price tiers starting below this MOQ will be excluded from the sheet. Example: `--minmoq 100`.
+* `--minmoq <MIN_MOQ>`: (Optional, default: 120) The minimum order quantity. Price tiers starting below this MOQ will be excluded from the sheet. Example: `--minmoq 100`.
 * `--maxmoq <MAX_MOQ>`: (Optional, default: None) The maximum order quantity. Price tiers starting above this MOQ will be excluded. Example: `--maxmoq 500`.
 
 **Example Usage:**
