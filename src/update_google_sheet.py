@@ -338,15 +338,21 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 # Use SKU direct price if available, otherwise use the tier price
                 price_to_use = sku['direct_price'] if sku['direct_price'] else price
                 
+                # Ensure price is properly formatted as a number if it exists
+                try:
+                    price_value = float(price_to_use) if price_to_use else 0
+                except (ValueError, TypeError):
+                    price_value = 0
+                
                 row = [
-                    sku['id'],  # Always include ID
-                    sku['image'],  # Always include image
-                    price_to_use,  # Price for this tier/SKU
-                    "",  # price cust (empty)
-                    "",  # profit (empty)
-                    moq,  # MOQ for this tier (moved after profit)
-                    sku['info'],  # Always include info
-                    sku['link']  # Always include link
+                    sku['id'],  # A: ID
+                    sku['image'],  # B: Photo
+                    price_value,  # C: price 1688 (as number for currency formatting)
+                    "",  # D: price cust (empty)
+                    "",  # E: profit (empty)
+                    int(moq) if moq and moq.isdigit() else moq,  # F: MOQ (as number if possible)
+                    sku['info'],  # G: info
+                    sku['link']  # H: link
                 ]
                 rows_to_append.append(row)
             
@@ -409,6 +415,20 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                                     'mergeType': 'MERGE_ALL'
                                 }
                             })
+                            
+                            # Also merge the link column (index 7, column H) for each price/moq group
+                            merge_requests.append({
+                                'mergeCells': {
+                                    'range': {
+                                        'sheetId': sheet_id_val,
+                                        'startRowIndex': actual_start_row_1_indexed - 1 + group['start_row'],
+                                        'endRowIndex': actual_start_row_1_indexed - 1 + group['end_row'],
+                                        'startColumnIndex': 7,  # Link column (H)
+                                        'endColumnIndex': 8     # End at column I (exclusive)
+                                    },
+                                    'mergeType': 'MERGE_ALL'
+                                }
+                            })
                     
                     if merge_requests:
                         service.spreadsheets().batchUpdate(
@@ -442,113 +462,97 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                             body={'requests': row_height_requests}
                         ).execute()
                         print(f"Set consistent row height of {TARGET_ROW_HEIGHT}px for all rows.")
-                    # --- End Row Heights ---
-
                     # --- Apply Final Cell Formatting (Alignment, Currency, Formulas) ---
                     formatting_requests = []
-                    actual_end_row_1_indexed = (actual_start_row_1_indexed -1) + len(rows_to_append) # Calculate end row based on how many rows were prepared
+                    actual_end_row_1_indexed = (actual_start_row_1_indexed - 1) + len(rows_to_append)
 
-                    # 0. Ensure data rows are NOT bold (overrides any prior formatting)
+                    # 0. Set default formatting for all cells (centered, not bold, wrapped text)
                     formatting_requests.append({
                         'repeatCell': {
                             'range': {
                                 'sheetId': sheet_id_val,
-                                'startRowIndex': actual_start_row_1_indexed - 1, 
+                                'startRowIndex': actual_start_row_1_indexed - 1,
                                 'endRowIndex': actual_end_row_1_indexed,
-                                'startColumnIndex': 0, # Column A
+                                'startColumnIndex': 0,  # Column A
                                 'endColumnIndex': 8  # Column H
                             },
                             'cell': {
                                 'userEnteredFormat': {
+                                    'horizontalAlignment': 'CENTER',
+                                    'verticalAlignment': 'MIDDLE',
+                                    'wrapStrategy': 'WRAP',
                                     'textFormat': {'bold': False}
                                 }
                             },
-                            'fields': 'userEnteredFormat.textFormat.bold'
+                            'fields': 'userEnteredFormat(horizontalAlignment,verticalAlignment,wrapStrategy,textFormat.bold)'
                         }
                     })
 
-                    # 1. Center all added cells (A to H for the new rows)
-                    formatting_requests.append({
-                        'repeatCell': {
-                            'range': {
-                                'sheetId': sheet_id_val,
-                                'startRowIndex': actual_start_row_1_indexed - 1, # 0-indexed
-                                'endRowIndex': actual_end_row_1_indexed, # Exclusive
-                                'startColumnIndex': 0, # Column A
-                                'endColumnIndex': 8  # Column H is index 7, so endIndex is 8
-                            },
-                            'cell': {
-                                'userEnteredFormat': {
-                                    'horizontalAlignment': 'CENTER',
-                                    'verticalAlignment': 'MIDDLE'
-                                }
-                            },
-                            'fields': 'userEnteredFormat(horizontalAlignment,verticalAlignment)'
-                        }
-                    })
-
-                    # 2. Format 'price 1688' (Column D, index 3) as CNY
-                    formatting_requests.append({
-                        'repeatCell': {
-                            'range': {
-                                'sheetId': sheet_id_val,
-                                'startRowIndex': actual_start_row_1_indexed - 1,
-                                'endRowIndex': actual_end_row_1_indexed,
-                                'startColumnIndex': 3, # Column D
-                                'endColumnIndex': 4
-                            },
-                            'cell': {
-                                'userEnteredFormat': {
-                                    'numberFormat': {'type': 'CURRENCY', 'pattern': '¥#,##0.00'}
-                                }
-                            },
-                            'fields': 'userEnteredFormat.numberFormat'
-                        }
-                    })
-
-                    # 3. Format 'price cust' (Column E, index 4) as CNY
-                    formatting_requests.append({
-                        'repeatCell': {
-                            'range': {
-                                'sheetId': sheet_id_val,
-                                'startRowIndex': actual_start_row_1_indexed - 1,
-                                'endRowIndex': actual_end_row_1_indexed,
-                                'startColumnIndex': 4, # Column E
-                                'endColumnIndex': 5
-                            },
-                            'cell': {
-                                'userEnteredFormat': {
-                                    'numberFormat': {'type': 'CURRENCY', 'pattern': '¥#,##0.00'}
-                                }
-                            },
-                            'fields': 'userEnteredFormat.numberFormat'
-                        }
-                    })
-
-                    # 4. Set Profit Formulas (Column F, index 5)
-                    for i in range(len(rows_to_append)):
-                        current_sheet_row = actual_start_row_1_indexed + i
-                        # Profit formula: =IF(AND(ISNUMBER(D<row>), ISNUMBER(E<row>)), E<row>-D<row>, "")
-                        formula = f'=IF(AND(ISNUMBER(D{current_sheet_row}), ISNUMBER(E{current_sheet_row})), E{current_sheet_row}-D{current_sheet_row}, "")'
+                    # 1. Format 'price 1688' (Column C, index 2) and 'price cust' (Column D, index 3) as CNY
+                    for col_idx in [2, 3]:  # Columns C and D (0-based index 2 and 3)
                         formatting_requests.append({
-                            'updateCells': {
-                                'rows': [{
-                                    'values': [{
-                                        'userEnteredValue': {'formulaValue': formula}
-                                    }]
-                                }],
-                                'fields': 'userEnteredValue',
+                            'repeatCell': {
                                 'range': {
                                     'sheetId': sheet_id_val,
-                                    'startRowIndex': current_sheet_row - 1, # 0-indexed
-                                    'endRowIndex': current_sheet_row,
-                                    'startColumnIndex': 5, # Column F
-                                    'endColumnIndex': 6
-                                }
+                                    'startRowIndex': actual_start_row_1_indexed - 1,
+                                    'endRowIndex': actual_end_row_1_indexed,
+                                    'startColumnIndex': col_idx,
+                                    'endColumnIndex': col_idx + 1
+                                },
+                                'cell': {
+                                    'userEnteredFormat': {
+                                        'numberFormat': {
+                                            'type': 'CURRENCY',
+                                            'pattern': '¥#,##0.00;¥-#,##0.00'
+                                        },
+                                        'horizontalAlignment': 'CENTER',
+                                        'verticalAlignment': 'MIDDLE'
+                                    }
+                                },
+                                'fields': 'userEnteredFormat(numberFormat,horizontalAlignment,verticalAlignment)'
+                            }
+                        })
+
+                    # 2. Set Profit Formulas (Column E, index 4)
+                    for i in range(len(rows_to_append)):
+                        current_row = actual_start_row_1_indexed + i
+                        formula = f'=IF(AND(ISNUMBER(D{current_row}),ISNUMBER(C{current_row})),D{current_row}-C{current_row},"")'
+                        formatting_requests.append({
+                            'updateCells': {
+                                'range': {
+                                    'sheetId': sheet_id_val,
+                                    'startRowIndex': current_row - 1,
+                                    'endRowIndex': current_row,
+                                    'startColumnIndex': 4,  # Column E (profit)
+                                    'endColumnIndex': 5
+                                },
+                                'rows': [{
+                                    'values': [{
+                                        'userEnteredValue': {'formulaValue': formula},
+                                        'userEnteredFormat': {
+                                            'numberFormat': {
+                                                'type': 'CURRENCY',
+                                                'pattern': '¥#,##0.00;¥-#,##0.00'
+                                            },
+                                            'horizontalAlignment': 'CENTER',
+                                            'verticalAlignment': 'MIDDLE'
+                                        }
+                                    }]
+                                }],
+                                'fields': 'userEnteredValue,userEnteredFormat(numberFormat,horizontalAlignment,verticalAlignment)'
                             }
                         })
                     
-                    # 5. Set Text Wrapping for 'info' column (G, index 6)
+                    # 3. Apply all formatting requests
+                    if formatting_requests:
+                        service.spreadsheets().batchUpdate(
+                            spreadsheetId=spreadsheet_id,
+                            body={'requests': formatting_requests}
+                        ).execute()
+                        print("Applied cell formatting and formulas.")
+                    # --- End Cell Formatting ---
+
+                    # 4. Set Text Wrapping for 'info' column (G, index 6)
                     formatting_requests.append({
                         'repeatCell': {
                             'range': {
