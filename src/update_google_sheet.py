@@ -36,7 +36,7 @@ else:
 
 # Script configurations
 TARGET_SHEET_NAME = "Sheet1"  # The name of the sheet to update
-EXPECTED_HEADER = ["id", "photo", "moq", "price 1688", "price cust", "profit", "info", "link"]
+EXPECTED_HEADER = ["id", "photo", "price 1688", "price cust", "profit", "moq", "info", "link"]
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # --- Google Sheets Helper Functions ---
@@ -274,9 +274,8 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         except Exception as e:
             print(f"DEBUG: Non-API error during ID sequence processing: {e}. Defaulting SKU sequence to 1.")
 
-        rows_to_append = []
-        sku_processing_details = [] 
-        
+        # First, prepare all SKU information
+        sku_data = []
         date_prefix = datetime.datetime.now().strftime("%Y%m%d")
         
         # SKU ID formatting based on product_type argument
@@ -287,48 +286,77 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
             product_id_template = f"{date_prefix}_{{counter:03d}}"
         
         sku_id_counter = start_sku_index
-
+        
+        # First pass: collect all SKU data
         for sku_info in product_sku_infos:
             item_id = product_id_template.format(counter=sku_id_counter)
             
+            # Get SKU image URL
             sku_image_url = ''
             if sku_info.get('skuAttributes') and isinstance(sku_info['skuAttributes'], list) and len(sku_info['skuAttributes']) > 0:
                 for attr in sku_info['skuAttributes']:
                     if isinstance(attr, dict) and attr.get('skuImageUrl'):
                         sku_image_url = attr.get('skuImageUrl', '').strip()
-                        break # Found the first image URL for this SKU
+                        break
             
             image_formula = ''
-            if sku_image_url: # Only create formula if URL exists
-                # Make the image a hyperlink to itself
+            if sku_image_url:
                 image_formula = f'=HYPERLINK("{sku_image_url}", IMAGE("{sku_image_url}"))'
-            else:
-                image_formula = '' # Leave blank if no image URL
-
-            num_rows_for_this_sku = 0
-            for i, tier_data in enumerate(price_tiers_to_process):
-                # ID, Photo, Info, OfferID only in the first row of the SKU group
-                current_id = item_id if i == 0 else ""
-                current_photo = image_formula if i == 0 else ""
-                # For now, Info and OfferID are blank, but would follow the same pattern
-                current_info = "" # Placeholder
-                current_offerid = "" # Placeholder
-                current_link = source_url if i == 0 else "" # Use the passed source_url for the link column
+            
+            # Get SKU direct price if available
+            sku_direct_price = str(sku_info['price']) if sku_info.get('price') else None
+            
+            # Get SKU info text from attribute 3216
+            sku_info_text = ""
+            if sku_info.get('skuAttributes') and isinstance(sku_info['skuAttributes'], list):
+                for attr in sku_info['skuAttributes']:
+                    if isinstance(attr, dict) and attr.get('attributeId') == 3216 and 'valueTrans' in attr:
+                        sku_info_text = str(attr['valueTrans'])
+                        break
+            
+            sku_data.append({
+                'id': item_id,
+                'image': image_formula,
+                'info': sku_info_text,
+                'direct_price': sku_direct_price,
+                'link': source_url
+            })
+            
+            sku_id_counter += 1
+        
+        # Second pass: create rows grouped by price/moq
+        rows_to_append = []
+        price_moq_groups = []
+        
+        # Process each price/moq tier
+        for tier_data in price_tiers_to_process:
+            moq = tier_data['moq']
+            price = tier_data['price1688']
+            
+            # Add all SKUs for this price/moq tier
+            for sku in sku_data:
+                # Use SKU direct price if available, otherwise use the tier price
+                price_to_use = sku['direct_price'] if sku['direct_price'] else price
                 
                 row = [
-                    current_id,
-                    current_photo,
-                    tier_data['moq'],
-                    tier_data['price1688'],
-                    "",  # price cust
-                    "",  # profit
-                    current_info if i == 0 else "",
-                    current_link if i == 0 else ""
+                    sku['id'],  # Always include ID
+                    sku['image'],  # Always include image
+                    price_to_use,  # Price for this tier/SKU
+                    "",  # price cust (empty)
+                    "",  # profit (empty)
+                    moq,  # MOQ for this tier (moved after profit)
+                    sku['info'],  # Always include info
+                    sku['link']  # Always include link
                 ]
                 rows_to_append.append(row)
-                num_rows_for_this_sku += 1
-            sku_processing_details.append(num_rows_for_this_sku)
-            sku_id_counter += 1 # Increment for the next product_item
+            
+            # Track the number of rows for this price/moq group for merging
+            if sku_data:  # Only add if there are SKUs
+                price_moq_groups.append({
+                    'start_row': len(rows_to_append) - len(sku_data),
+                    'end_row': len(rows_to_append),
+                    'moq': moq
+                })
 
         if not rows_to_append:
             print("No data processed to upload.")
@@ -363,71 +391,57 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 if start_row_match:
                     actual_start_row_1_indexed = int(start_row_match.group(0))
 
-                    # --- Apply Cell Merges --- 
+                    # --- Apply Cell Merges for MOQ within price/moq groups ---
                     merge_requests = []
-                    current_data_row_offset_for_merge = 0
                     
-                    for num_rows_this_sku in sku_processing_details:
-                        if num_rows_this_sku > 1:
-                            merge_start_row_0_idx = actual_start_row_1_indexed - 1 + current_data_row_offset_for_merge
-                            merge_end_row_0_idx_exclusive = merge_start_row_0_idx + num_rows_this_sku
-                            
-                            columns_to_merge_indices = [0, 1, 6, 7] # A, B, G, H
-                            for col_idx in columns_to_merge_indices:
-                                merge_requests.append({
-                                    'mergeCells': {
-                                        'range': {
-                                            'sheetId': sheet_id_val, # Use sheet_id passed into the function
-                                            'startRowIndex': merge_start_row_0_idx,
-                                            'endRowIndex': merge_end_row_0_idx_exclusive,
-                                            'startColumnIndex': col_idx,
-                                            'endColumnIndex': col_idx + 1
-                                        },
-                                        'mergeType': 'MERGE_ALL' 
-                                    }
-                                })
-                        current_data_row_offset_for_merge += num_rows_this_sku
-                    
-                    if merge_requests:
-                        service.spreadsheets().batchUpdate(spreadsheetId=spreadsheet_id, body={'requests': merge_requests}).execute()
-                        print(f"Successfully applied cell merges for multi-tier SKUs.")
-                    # --- End Cell Merges ---
-
-                    # --- Apply Row Heights (Dynamically per SKU block) ---
-                    row_height_requests = []
-                    current_data_row_offset_for_height = 0
-                    SKU_BLOCK_TARGET_HEIGHT = 400 # Reverted to original target
-                    # print(f"DEBUG: Using SKU_BLOCK_TARGET_HEIGHT = {SKU_BLOCK_TARGET_HEIGHT}px for testing.") # Keep original comment if needed
-
-                    for i, num_rows_this_sku in enumerate(sku_processing_details):
-                        if num_rows_this_sku > 0:
-                            desired_individual_row_height = max(1, int(SKU_BLOCK_TARGET_HEIGHT / num_rows_this_sku))
-                            # Apply workaround for observed doubling effect by the API/renderer
-                            api_pixel_size_to_send = max(1, int(desired_individual_row_height / 2))
-                            
-                            abs_start_row_0_idx = (actual_start_row_1_indexed - 1) + current_data_row_offset_for_height
-                            abs_end_row_0_idx_exclusive = abs_start_row_0_idx + num_rows_this_sku
-
-                            print(f"DEBUG SKU Block {i+1}: num_rows={num_rows_this_sku}, desired_row_height={desired_individual_row_height}, api_sent_height={api_pixel_size_to_send}, range_0idx=[{abs_start_row_0_idx}-{abs_end_row_0_idx_exclusive-1}]")
-
-                            row_height_requests.append({
-                                'updateDimensionProperties': {
+                    for group in price_moq_groups:
+                        if group['end_row'] > group['start_row']:  # If there's more than one row in this group
+                            # Merge the MOQ column (index 5, column F) for each price/moq group
+                            merge_requests.append({
+                                'mergeCells': {
                                     'range': {
-                                        'sheetId': sheet_id_val, # Use sheet_id passed into the function
-                                        'dimension': 'ROWS',
-                                        'startIndex': abs_start_row_0_idx,
-                                        'endIndex': abs_end_row_0_idx_exclusive
+                                        'sheetId': sheet_id_val,
+                                        'startRowIndex': actual_start_row_1_indexed - 1 + group['start_row'],
+                                        'endRowIndex': actual_start_row_1_indexed - 1 + group['end_row'],
+                                        'startColumnIndex': 5,  # MOQ column (F)
+                                        'endColumnIndex': 6     # End at column G (exclusive)
                                     },
-                                    'properties': {'pixelSize': api_pixel_size_to_send},
-                                    'fields': 'pixelSize'
+                                    'mergeType': 'MERGE_ALL'
                                 }
                             })
-                        current_data_row_offset_for_height += num_rows_this_sku
+                    
+                    if merge_requests:
+                        service.spreadsheets().batchUpdate(
+                            spreadsheetId=spreadsheet_id, 
+                            body={'requests': merge_requests}
+                        ).execute()
+                        print(f"Successfully merged MOQ cells for {len(merge_requests)} price/moq groups.")
+                    # --- End Cell Merges ---
+
+                    # --- Set Row Height to 400px for each SKU ---
+                    row_height_requests = []
+                    TARGET_ROW_HEIGHT = 400  # 400px per SKU row
+                    
+                    # Apply height to all rows
+                    row_height_requests.append({
+                        'updateDimensionProperties': {
+                            'range': {
+                                'sheetId': sheet_id_val,
+                                'dimension': 'ROWS',
+                                'startIndex': actual_start_row_1_indexed - 1,
+                                'endIndex': actual_start_row_1_indexed - 1 + len(rows_to_append)
+                            },
+                            'properties': {'pixelSize': TARGET_ROW_HEIGHT // 2},  # Halved due to API rendering quirk
+                            'fields': 'pixelSize'
+                        }
+                    })
                     
                     if row_height_requests:
                         service.spreadsheets().batchUpdate(
-                            spreadsheetId=spreadsheet_id, body={'requests': row_height_requests}).execute()
-                        print(f"Dynamically set row heights for SKU blocks. Target visual block height: {SKU_BLOCK_TARGET_HEIGHT}px.")
+                            spreadsheetId=spreadsheet_id, 
+                            body={'requests': row_height_requests}
+                        ).execute()
+                        print(f"Set consistent row height of {TARGET_ROW_HEIGHT}px for all rows.")
                     # --- End Row Heights ---
 
                     # --- Apply Final Cell Formatting (Alignment, Currency, Formulas) ---
