@@ -72,7 +72,7 @@ def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_i
             print(f"Attempting to update Google Sheet... Product: {product_name}, MinMOQ: {min_moq}, MaxMOQ: {max_moq}")
 
             try:
-                run_sheet_update(
+                stats = run_sheet_update(
                     product_data_path=temp_product_data_path,
                     product_type_arg=product_name,
                     min_moq_arg=min_moq,
@@ -80,7 +80,13 @@ def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_i
                     source_url_arg=url,
                     google_sheet_id_param=google_sheet_id
                 )
-                message = f"Google Sheet update process completed successfully for {url} into sheet {google_sheet_id}"
+                
+                # Create detailed success message with statistics
+                if stats and not stats.get('error'):
+                    message = f"✅ Successfully processed '{stats['product_name']}' - {stats['skus_found']} SKUs found → {stats['skus_after_filter']} after filtering → {stats['rows_uploaded']} uploaded to Google Sheet"
+                else:
+                    message = f"⚠️ Processing completed with issues for '{stats.get('product_name', 'Unknown Product')}': {stats.get('error', 'Unknown error')}"
+                
                 response_data = {"message": message}
                 print(message)
             except Exception as e_sheet:

@@ -11,6 +11,7 @@ This script automates fetching product information from 1688.com product URLs vi
 * Formats the Google Sheet with a frozen header, bolded text, and specific column widths for better readability.
 * Calculates a placeholder profit column in the sheet.
 * Allows filtering of price tiers based on minimum (minmoq) and maximum (maxmoq) order quantities.
+* **Enhanced User Feedback**: Provides detailed processing statistics including product names, SKU counts found, filtered, and uploaded to help track sourcing progress.
 
 ## How It Works
 
@@ -65,6 +66,18 @@ For each SKU, the script processes these attributes in order:
 * Missing images are left empty
 * All API errors are logged with detailed messages
 * The script continues processing even if some data is missing
+
+## User Experience
+
+The application provides clear, real-time feedback during processing:
+
+* **Processing Status**: Shows which product link is currently being processed
+* **Detailed Results**: Displays product names (truncated for readability) and processing statistics
+* **Success Messages**: Shows exactly how many SKUs were found, filtered by MOQ criteria, and uploaded
+* **Error Handling**: Clear error messages with specific details when issues occur
+* **Visual Indicators**: Color-coded messages with emoji indicators for easy status recognition
+
+Example success message: *"✅ Successfully processed 'Wireless Bluetooth Headphones Pro...' - 15 SKUs found → 8 after filtering → 8 uploaded to Google Sheet"*
 
 ## Prerequisites
 

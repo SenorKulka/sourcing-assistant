@@ -144,7 +144,7 @@
                 for (const link of productLinks) {
                     if (!link.trim()) continue; // Skip empty lines
 
-                    statusMessagesDiv.innerHTML = `Processing ${link}...`;
+                    statusMessagesDiv.innerHTML = `<p style="color: blue;">🔄 Processing ${link}...</p>`;
                     console.log(`Sending request for: ${link}, Product: ${productName}, MinMOQ: ${minMoq}, MaxMOQ: ${maxMoq}`);
 
                     try {
@@ -165,22 +165,22 @@
                         const result = await response.json();
 
                         if (response.ok) {
-                            resultsHTML += `<p style="color: green;">Successfully processed ${link}: ${result.message || 'Done.'}</p>`;
+                            resultsHTML += `<p style="color: green; margin: 10px 0; padding: 8px; background-color: #f0f8f0; border-left: 4px solid green;">${result.message || 'Done.'}</p>`;
                         } else {
-                            resultsHTML += `<p style="color: red;">Error processing ${link}: ${result.error || 'Unknown error'}</p>`;
+                            resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${result.error || 'Unknown error'}</p>`;
                             allSuccessful = false;
                         }
                     } catch (error) {
-                        resultsHTML += `<p style="color: red;">Network or client-side error processing ${link}: ${error.message || 'Unknown error'}</p>`;
+                        resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Network error processing ${link}: ${error.message || 'Unknown error'}</p>`;
                         allSuccessful = false;
                         console.error('Fetch error:', error);
                     }
                 }
 
                 if (allSuccessful) {
-                     resultsHTML = '<p style="color: green;">All links processed!</p>' + resultsHTML;
+                     resultsHTML = '<p style="color: green; font-weight: bold; margin: 10px 0; padding: 10px; background-color: #f0f8f0; border: 2px solid green; border-radius: 5px;">🎉 All links processed successfully!</p>' + resultsHTML;
                 } else {
-                     resultsHTML = '<p style="color: orange;">Some links encountered issues.</p>' + resultsHTML;
+                     resultsHTML = '<p style="color: orange; font-weight: bold; margin: 10px 0; padding: 10px; background-color: #fff8e1; border: 2px solid orange; border-radius: 5px;">⚠️ Some links encountered issues - check details below.</p>' + resultsHTML;
                 }
                 statusMessagesDiv.innerHTML = resultsHTML;
             });

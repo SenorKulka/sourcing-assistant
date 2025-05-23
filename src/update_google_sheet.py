@@ -290,6 +290,13 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         with open(product_data_path, 'r') as f:
             data = json.load(f)
 
+        # Extract product name early for logging
+        product_name = data.get('result', {}).get('result', {}).get('subjectTrans', 
+                      data.get('result', {}).get('result', {}).get('subject', 'Unknown Product'))
+        product_name_short = product_name[:40] + "..." if len(product_name) > 40 else product_name
+        
+        print(f"📦 Processing product: {product_name_short}")
+
         # Debug: Log the structure of the data
         print("\n--- DEBUG: API Response Structure ---")
         print(f"Top-level keys: {list(data.keys())}")
@@ -300,7 +307,13 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
             print(f"❌ API Error: {error_msg}")
             print(f"Full response: {json.dumps(data, indent=2, ensure_ascii=False)}")
             print("----------------------------------\n")
-            return
+            return {
+                "product_name": product_name_short,
+                "rows_uploaded": 0,
+                "skus_found": 0,
+                "skus_after_filter": 0,
+                "error": error_msg
+            }
             
         if 'result' in data:
             print(f"Result keys: {list(data['result'].keys()) if isinstance(data['result'], dict) else 'Not a dict'}")
@@ -341,7 +354,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         for sku_list in possible_sku_locations:
             if isinstance(sku_list, list) and len(sku_list) > 0:
                 product_sku_infos = sku_list
-                print(f"DEBUG: Found {len(sku_list)} SKUs in response using one of the possible_sku_locations.")
+                print(f"🔍 Found {len(sku_list)} SKUs in API response")
                 break
         
         print(f"DEBUG: product_sku_infos after find_sku_data: {product_sku_infos} (type: {type(product_sku_infos)}, len: {len(product_sku_infos) if isinstance(product_sku_infos, list) else 'N/A'})")
@@ -623,14 +636,20 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         if min_moq is not None or max_moq is not None:
             print(f"DEBUG: Before SKU-level MOQ filtering. min_moq: {min_moq}, max_moq: {max_moq}. Current sku_data: {sku_data_final_rows}")
             sku_data_final_rows = filter_skus_by_moq(sku_data_final_rows, min_moq, max_moq, data) # Pass 'data' for product_level_data
-            print(f"DEBUG: After SKU-level MOQ filtering. Filtered sku_data: {sku_data_final_rows}")
+            print(f"✅ After MOQ filtering: {len(sku_data_final_rows)} SKUs remaining (from {len(product_sku_infos) if product_sku_infos else 0} original)")
         else:
             print(f"DEBUG: SKU-level MOQ filtering skipped (no SKUs to filter or no MOQ params).")
 
         if not sku_data_final_rows:
             print("DEBUG: sku_data_final_rows is empty after all processing and filtering. No data to upload.")
             print("No SKUs found after filtering by MOQ or no initial product/SKU data.")
-            return
+            return {
+                "product_name": product_name_short,
+                "rows_uploaded": 0,
+                "skus_found": len(product_sku_infos) if product_sku_infos else 0,
+                "skus_after_filter": 0,
+                "error": "No SKUs found after filtering by MOQ or no initial product/SKU data."
+            }
 
         # --- Second pass: create rows_to_append based on sku_data_final_rows --- 
         rows_to_append = []
@@ -704,7 +723,13 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         else:
             print("DEBUG: rows_to_append is empty after trying to generate rows. No data will be uploaded.")
             print("No data processed to upload (rows_to_append is empty).")
-            return
+            return {
+                "product_name": product_name_short,
+                "rows_uploaded": 0,
+                "skus_found": len(product_sku_infos) if product_sku_infos else 0,
+                "skus_after_filter": 0,
+                "error": "No data processed to upload (rows_to_append is empty)."
+            }
 
         # Append data after the header (assuming header is row 1)
         # The append operation will add data starting at the first empty row it finds.
@@ -717,7 +742,8 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
             includeValuesInResponse=False # Not needed, but good to be explicit
         ).execute()
         
-        print(f"Successfully uploaded {len(rows_to_append)} product SKUs to '{sheet_name}'.")
+        print(f"🎉 Successfully uploaded {len(rows_to_append)} product variants to Google Sheet")
+        print(f"📊 Summary for '{product_name_short}': {len(product_sku_infos) if product_sku_infos else 0} SKUs found → {len(sku_data_final_rows)} after filtering → {len(rows_to_append)} uploaded")
 
         # Set row heights for the newly added rows
         updated_range_str = append_result.get('updates', {}).get('updatedRange', '')
@@ -995,6 +1021,14 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         print(f"An unexpected error occurred during data processing: {e}")
         raise
 
+    return {
+        "product_name": product_name_short,
+        "rows_uploaded": len(rows_to_append),
+        "skus_found": len(product_sku_infos) if product_sku_infos else 0,
+        "skus_after_filter": len(sku_data_final_rows),
+        "price_moq_groups": price_moq_groups
+    }
+
 def run_sheet_update(product_data_path, product_type_arg, min_moq_arg, max_moq_arg, source_url_arg, google_sheet_id_param):
     """Main function to orchestrate the sheet update process using a provided Google Sheet ID."""
     
@@ -1042,9 +1076,12 @@ def run_sheet_update(product_data_path, product_type_arg, min_moq_arg, max_moq_a
         ensure_header_and_freeze(service, google_sheet_id_param, sheet_id_val, TARGET_SHEET_NAME, EXPECTED_HEADER)
         print(f"Header check/update for sheet '{TARGET_SHEET_NAME}' (ID: {sheet_id_val}) complete.")
 
-        process_and_upload_data(service, google_sheet_id_param, TARGET_SHEET_NAME, product_data_path, product_type_arg, min_moq_arg, max_moq_arg, sheet_id_val, source_url_arg)
+        # Get statistics from the data processing
+        stats = process_and_upload_data(service, google_sheet_id_param, TARGET_SHEET_NAME, product_data_path, product_type_arg, min_moq_arg, max_moq_arg, sheet_id_val, source_url_arg)
         print(f"Data processing and upload for sheet '{TARGET_SHEET_NAME}' complete.")
         print(f"--- Google Sheet Update for Sheet ID: {google_sheet_id_param} Finished Successfully ---")
+        
+        return stats  # Return the statistics
 
     except FileNotFoundError as e_fnf:
         print(f"ERROR during sheet update (FileNotFound) for '{google_sheet_id_param}': {e_fnf}")
