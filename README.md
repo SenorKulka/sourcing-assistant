@@ -16,10 +16,55 @@ This script automates fetching product information from 1688.com product URLs vi
 
 1. The script takes a 1688.com product URL as input.
 2. It calls the LovBuy API to retrieve the product data in JSON format.
-3. The script then processes this JSON data, extracting relevant details like product title, SKU variations, images, and price tiers.
+3. The script processes the JSON data, extracting relevant details like product title, SKU variations, images, and price tiers.
 4. It connects to the specified Google Sheet using the Google Sheets API.
 5. The script ensures a header row is present and formatted, then appends the processed product data into new rows.
 6. Unique IDs are generated for each SKU to help track them.
+
+## Data Handling Behavior
+
+The script follows a specific hierarchy when processing and displaying product data.
+
+### 1. Product vs SKU Data
+
+* **When SKUs are available:**
+  * Each SKU is listed as a separate row in the spreadsheet
+  * SKU-specific data takes precedence over product-level data
+  * If a SKU is missing certain attributes, they're filled from product-level data when available
+
+* **When no SKUs are found:**
+  * A single row is created using product-level data
+  * All available product attributes are used
+
+### 2. Data Priority (Highest to Lowest)
+
+1. **SKU-specific attributes** (if available)
+2. **Product-level attributes** (as fallback)
+3. **Empty values** (if no data is available at any level)
+
+### 3. Image Handling
+
+* **Primary source:** SKU-specific image (from `skuAttributes.skuImageUrl`)
+* **Fallback:** Main product image (first image from `result.result.productImage.images[0]`)
+* **Format:** Images are embedded as clickable thumbnails with links to full-size images
+
+### 4. Attribute Processing
+
+For each SKU, the script processes these attributes in order:
+
+1. **SKU ID**: Auto-generated with format `YYYYMMDD_PRODUCTNAME_###`
+2. **Image**: As per image handling above
+3. **Price**: SKU price → Product price → Empty if none
+4. **Info Text**: SKU attribute 3216 → Product attribute 3216 → Empty
+5. **Material**: SKU attribute 287 → Product attribute 287 → Empty
+6. **Link**: Cleaned source URL (without query parameters)
+
+### 5. Error Handling
+
+* Missing SKU data falls back to product data
+* Missing images are left empty
+* All API errors are logged with detailed messages
+* The script continues processing even if some data is missing
 
 ## Prerequisites
 
@@ -111,8 +156,6 @@ Once everything is set up, you can run the application. Ensure your virtual envi
 
 1. **Start the Flask Server:**
 
-    Open your terminal, navigate to the project directory, and run:
-
     ```bash
     uv run python main.py
     ```
@@ -175,6 +218,6 @@ uv run python main.py https://detail.1688.com/offer/yyyyyyyyyyyy.html --product 
 * **`uv: command not found`:** Ensure `uv` was installed correctly and its installation directory is in your system's PATH.
 * **Dependency Issues:** If `uv sync` or `uv pip install` fails, check your internet connection and ensure `pyproject.toml` (or `requirements.txt`) is correctly formatted.
 
----
+## License
 
-Happy Sourcing!
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

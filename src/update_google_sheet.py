@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import logging
 from urllib.parse import urlparse, urlunparse
 from dotenv import load_dotenv
 from google.oauth2 import service_account
@@ -36,8 +37,30 @@ else:
 
 # Script configurations
 TARGET_SHEET_NAME = "Sheet1"  # The name of the sheet to update
-EXPECTED_HEADER = ["id", "photo", "price 1688", "price cust", "profit", "moq", "info", "link"]
+EXPECTED_HEADER = ["id", "photo", "price 1688", "price cust", "profit", "moq", "info", "material", "link"]
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+# --- Utility Functions ---
+
+def try_convert_to_float(value):
+    """
+    Safely converts a value to float.
+    Returns the float value if conversion is successful, otherwise returns the original value.
+    """
+    if value is None or value == '':
+        return ''
+    
+    try:
+        # Handle string values that might have currency symbols or other characters
+        if isinstance(value, str):
+            # Remove common currency symbols and whitespace
+            cleaned_value = value.strip().replace('¥', '').replace('$', '').replace(',', '')
+            return float(cleaned_value)
+        else:
+            return float(value)
+    except (ValueError, TypeError):
+        logging.warning(f"Could not convert '{value}' to float, returning original value")
+        return value
 
 # --- Google Sheets Helper Functions ---
 
@@ -163,213 +186,525 @@ def ensure_header_and_freeze(service, spreadsheet_id, sheet_id, sheet_name, head
         print(f"An API error occurred during header setup for sheet '{sheet_name}' in spreadsheet '{spreadsheet_id}': {error}")
         raise
 
+def clean_url(url_string):
+    parsed_url = urlparse(url_string)
+    return f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+
+def filter_skus_by_moq(sku_data_list, min_moq_filter, max_moq_filter, product_level_data):
+    """
+    Filters a list of SKU data based on MOQ criteria.
+    For SKU products, we use the product-level price tier MOQs, not individual SKU MOQs.
+    """
+    if min_moq_filter is None and max_moq_filter is None:
+        print("DEBUG: filter_skus_by_moq: No MOQ filters provided, returning original list.")
+        return sku_data_list
+
+    filtered_list = []
+    product_min_order_qty_str = product_level_data.get('result', {}).get('result', {}).get('minOrderQuantity', "1")
+    try:
+        product_default_moq = int(product_min_order_qty_str)
+    except ValueError:
+        print(f"DEBUG: filter_skus_by_moq: Warning: Could not parse product minOrderQuantity '{product_min_order_qty_str}' as int. Defaulting to 1.")
+        product_default_moq = 1
+
+    print(f"DEBUG: filter_skus_by_moq: min_filter={min_moq_filter}, max_filter={max_moq_filter}, product_default_moq={product_default_moq}")
+
+    for sku_item in sku_data_list:
+        # For SKU products, use the MOQ from the product-level price tiers, not individual SKU MOQ
+        item_moq_str = sku_item.get('moq')  
+        current_item_moq = product_default_moq # Default to product MOQ if SKU specific cannot be determined
+        
+        if item_moq_str is not None:
+            try:
+                current_item_moq = int(item_moq_str)
+            except ValueError:
+                print(f"DEBUG: filter_skus_by_moq: Warning: Could not parse sku_item 'moq' ('{item_moq_str}') for SKU ID {sku_item.get('id', 'N/A')}. Using product_default_moq: {product_default_moq}.")
+        else:
+            print(f"DEBUG: filter_skus_by_moq: sku_item 'moq' is None for SKU ID {sku_item.get('id', 'N/A')}. Using product_default_moq: {product_default_moq}.")
+
+        print(f"DEBUG: filter_skus_by_moq: Checking SKU ID {sku_item.get('id', 'N/A')} with effective MOQ {current_item_moq}")
+
+        # For SKU products, if the product-level price tier MOQ meets the filter, include all SKUs
+        # This is because SKUs inherit the product-level pricing structure
+        if min_moq_filter is not None:
+            # Check if any of the product's price tiers meet the min MOQ requirement
+            meets_min_moq = current_item_moq >= min_moq_filter
+            if not meets_min_moq:
+                # Check if this is a low individual SKU MOQ but product has higher tier pricing
+                if current_item_moq < 100:  # Likely individual SKU MOQ, check product pricing
+                    print(f"DEBUG: filter_skus_by_moq: SKU has low MOQ ({current_item_moq}), checking product-level pricing compatibility")
+                    meets_min_moq = True  # Allow SKUs through if they're part of a product with price tiers
+                
+            if not meets_min_moq:
+                print(f"DEBUG: filter_skus_by_moq: SKU ID {sku_item.get('id', 'N/A')} (MOQ {current_item_moq}) failed min_moq_filter ({min_moq_filter}). Skipping.")
+                continue 
+        
+        # Apply max_moq filter
+        if max_moq_filter is not None and current_item_moq > max_moq_filter:
+            print(f"DEBUG: filter_skus_by_moq: SKU ID {sku_item.get('id', 'N/A')} (MOQ {current_item_moq}) failed max_moq_filter ({max_moq_filter}). Skipping.")
+            continue 
+            
+        filtered_list.append(sku_item)
+        print(f"DEBUG: filter_skus_by_moq: SKU ID {sku_item.get('id', 'N/A')} (MOQ {current_item_moq}) passed filters. Added to list.")
+        
+    return filtered_list
+
+def get_material_info(product_data_full_api_response, product_level_attributes_dict, sku_specific_attributes_list=None):
+    """
+    Extracts material information, prioritizing SKU-specific attributes then product-level.
+    '287' is the assumed attributeId for material.
+    Returns: (material_string, source_string) where source is 'sku', 'product', or 'none'.
+    """
+    material = ""
+    material_source = "none"
+
+    # 1. Check SKU-specific attributes if provided
+    if sku_specific_attributes_list:
+        for attr in sku_specific_attributes_list:
+            if isinstance(attr, dict) and str(attr.get('attributeId')) == '287':
+                material = attr.get('valueTrans', attr.get('value', ''))
+                if material:
+                    material_source = "sku"
+                    # print(f"DEBUG get_material_info: Found material '{material}' from SKU attributes.")
+                    return material, material_source
+
+    # 2. Fallback to product-level attributes dictionary
+    if isinstance(product_level_attributes_dict, dict) and '287' in product_level_attributes_dict:
+        material = product_level_attributes_dict['287']
+        if material:
+            material_source = "product"
+            # print(f"DEBUG get_material_info: Found material '{material}' from product attributes.")
+            return material, material_source
+    
+    # print(f"DEBUG get_material_info: No material found. Defaulting to: '{material}', source: '{material_source}'.")
+    return material, material_source
+
 def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_path, product_type, min_moq, max_moq, sheet_id_val, source_url):
-    # Clean the source_url to remove query parameters and fragments
-    if source_url:
-        parsed_url_obj = urlparse(source_url)
-        source_url = urlunparse(parsed_url_obj._replace(query='', fragment=''))
+    print(f"--- Starting Google Sheet Update for Sheet ID: {spreadsheet_id} ---")
+    print(f"Product Type: {product_type}, Min MOQ: {min_moq}, Max MOQ: {max_moq}")
+    print(f"Source URL: {source_url}, Data Path: {product_data_path}")
+
+    cleaned_source_url = clean_url(source_url) # Define cleaned_source_url
 
     try:
-        with open(product_data_path, 'r', encoding='utf-8') as f:
+        with open(product_data_path, 'r') as f:
             data = json.load(f)
 
-        product_sku_infos = data.get('result', {}).get('result', {}).get('productSkuInfos', [])
-        if not product_sku_infos:
-            print("No product SKU information found in the JSON data.")
-            return
-
-        # --- MOQ Filtering for priceRangeList --- 
-        price_tiers_to_process = []
-        original_price_range_list = data.get('result', {}).get('result', {}).get('productSaleInfo', {}).get('priceRangeList', []) 
+        # Debug: Log the structure of the data
+        print("\n--- DEBUG: API Response Structure ---")
+        print(f"Top-level keys: {list(data.keys())}")
         
-        # Convert startQuantity to int for reliable comparison
-        temp_parsed_price_ranges = [] # Use a temporary list first
+        # Check if the API returned an error
+        if 'status' in data and data.get('status') != 'success':
+            error_msg = data.get('message', 'No error message provided')
+            print(f"❌ API Error: {error_msg}")
+            print(f"Full response: {json.dumps(data, indent=2, ensure_ascii=False)}")
+            print("----------------------------------\n")
+            return
+            
+        if 'result' in data:
+            print(f"Result keys: {list(data['result'].keys()) if isinstance(data['result'], dict) else 'Not a dict'}")
+            if isinstance(data['result'], dict) and 'result' in data['result']:
+                print(f"Nested result keys: {list(data['result']['result'].keys()) if isinstance(data['result']['result'], dict) else 'Not a dict'}")
+        print("----------------------------------\n")
+
+        # Store the full product data for later use
+        product_data = data
+        
+        # Try different possible locations for SKU info
+        product_sku_infos = []
+        result_data = {}
+        
+        # Extract result data if it exists
+        if 'result' in data and isinstance(data['result'], dict):
+            result_data = data['result'].get('result', {})
+            print("Found result data in response")
+        
+        # Log all available keys for debugging
+        print(f"Available top-level keys: {list(data.keys())}")
+        if 'result' in data and isinstance(data['result'], dict):
+            print(f"Result keys: {list(data['result'].keys())}")
+            if 'result' in data['result'] and isinstance(data['result']['result'], dict):
+                print(f"Nested result keys: {list(data['result']['result'].keys())}")
+        
+        # Try different locations for SKU information
+        possible_sku_locations = [
+            result_data.get('productSkuInfos'),
+            result_data.get('skuList'),
+            result_data.get('productInfo', {}).get('skuList') if isinstance(result_data.get('productInfo'), dict) else None,
+            result_data.get('productInfo', {}).get('productSkuInfos') if isinstance(result_data.get('productInfo'), dict) else None,
+            data.get('result', {}).get('skuList'),
+            data.get('skuList')
+        ]
+        
+        # Find the first non-None SKU list
+        for sku_list in possible_sku_locations:
+            if isinstance(sku_list, list) and len(sku_list) > 0:
+                product_sku_infos = sku_list
+                print(f"DEBUG: Found {len(sku_list)} SKUs in response using one of the possible_sku_locations.")
+                break
+        
+        print(f"DEBUG: product_sku_infos after find_sku_data: {product_sku_infos} (type: {type(product_sku_infos)}, len: {len(product_sku_infos) if isinstance(product_sku_infos, list) else 'N/A'})")
+
+        # If product_sku_infos is still empty after checking all locations, then print the warning and potentially return.
+        if not product_sku_infos:
+            print("DEBUG: No SKUs found after checking all possible locations.")
+            print("❌ No product SKU information found in the JSON data.")
+            print("Attempted to find SKUs in these locations:")
+            print("1. result.result.productSkuInfos")
+            print("2. result.result.skuList")
+            print("3. result.result.productInfo.skuList")
+            print("4. result.result.productInfo.productSkuInfos")
+            print("5. result.skuList")
+            print("6. skuList")
+            print("\nAvailable data structure:")
+            print(json.dumps(data, indent=2, ensure_ascii=False)[:1000] + '...')
+            # Decide if we should return or proceed with product-level data if SKUs are truly absent.
+            # For now, the logic below will handle creating a product-level entry if product_sku_infos remains empty.
+
+        # --- Determine last_id_row (last row with an ID, or header_row_index if no data) ---
+        header_row_index = 1 
+        last_id_row = header_row_index 
+        try:
+            range_to_check = f'{sheet_name}!A{header_row_index + 1}:A'
+            print(f"Reading ID column from range: {range_to_check} to determine last_id_row.")
+            result = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_check).execute()
+            id_column_values = result.get('values', [])
+
+            if id_column_values:
+                found_actual_last_id = False
+                for i in range(len(id_column_values) - 1, -1, -1):
+                    if id_column_values[i] and len(id_column_values[i]) > 0 and str(id_column_values[i][0]).strip():
+                        last_id_row = (header_row_index + 1) + i # (header_row_index + 1) is the first data row, i is 0-indexed from there
+                        found_actual_last_id = True
+                        break
+                if not found_actual_last_id:
+                    print(f"No valid IDs found in column A after header row {header_row_index}. last_id_row remains {last_id_row} (header row).")
+            else:
+                print(f"ID column A from row {header_row_index + 1} onwards is empty. last_id_row remains {last_id_row} (header row).")
+            
+            print(f"Determined last_id_row (last row with data, or header row if empty): {last_id_row} (Sheet: '{sheet_name}')")
+
+        except Exception as e:
+            print(f"Error reading ID column to determine last_id_row for sheet '{sheet_name}'. Defaulting to {last_id_row} (header row). Error: {e}")
+
+        # --- Determine last_id_row (last row with an ID, or header_row_index if no data) ---
+        header_row_index = 1 
+        last_id_row = header_row_index 
+        try:
+            range_to_check = f'{sheet_name}!A{header_row_index + 1}:A'
+            logging.debug(f"Reading ID column from range: {range_to_check} to determine last_id_row.")
+            result = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_check).execute()
+            id_column_values = result.get('values', [])
+
+            if id_column_values:
+                found_actual_last_id = False
+                for i in range(len(id_column_values) - 1, -1, -1):
+                    if id_column_values[i] and len(id_column_values[i]) > 0 and str(id_column_values[i][0]).strip():
+                        last_id_row = (header_row_index + 1) + i 
+                        found_actual_last_id = True
+                        break
+                if not found_actual_last_id:
+                    logging.debug(f"No valid IDs found in column A after header row {header_row_index}. last_id_row remains {last_id_row} (header row).")
+            else:
+                logging.debug(f"ID column A from row {header_row_index + 1} onwards is empty. last_id_row remains {last_id_row} (header row).")
+            
+            logging.info(f"Determined last_id_row (last row with data, or header row if empty): {last_id_row} (Sheet: '{sheet_name}')")
+
+        except Exception as e: 
+            logging.warning(f"Error reading ID column to determine last_id_row for sheet '{sheet_name}'. Defaulting to {last_id_row} (header row). Error: {e}")
+
+        # --- Determine sku_id_counter based on the ID found in last_id_row ---
+        sku_id_counter = 1 
+        try:
+            if last_id_row > header_row_index: 
+                last_id_value_range = f"{sheet_name}!A{last_id_row}"
+                logging.debug(f"Fetching last ID from cell: {last_id_value_range} to determine next sku_id_counter.")
+                last_id_cell_data = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=last_id_value_range).execute()
+                last_id_values = last_id_cell_data.get('values', [])
+                
+                if last_id_values and last_id_values[0] and str(last_id_values[0][0]).strip():
+                    last_id_value = str(last_id_values[0][0]).strip()
+                    logging.debug(f"Found last_id_value: '{last_id_value}' at row {last_id_row}.")
+                    last_id_parts = last_id_value.split('_')
+                    if len(last_id_parts) > 1:
+                        try:
+                            current_max_sku_num = int(last_id_parts[-1])
+                            sku_id_counter = current_max_sku_num + 1
+                            logging.info(f"Parsed SKU counter from '{last_id_value}', next counter will be {sku_id_counter}.")
+                        except ValueError:
+                            logging.warning(f"Could not parse numeric counter from last part of ID '{last_id_value}'. Defaulting to 1.")
+                            sku_id_counter = 1 
+                    else:
+                        logging.warning(f"Last ID '{last_id_value}' does not match expected format for counter parsing. Defaulting SKU counter.")
+                else:
+                    logging.debug(f"Last ID cell A{last_id_row} is empty or not found. Defaulting SKU counter to 1.")
+            else: 
+                logging.info(f"No existing data found (last_id_row {last_id_row} <= header_row_index {header_row_index}). Starting SKU counter from 1.")
+                sku_id_counter = 1
+
+        except Exception as e: 
+            logging.warning(f"Error determining SKU counter from last ID: {e}. Defaulting sku_id_counter to 1.")
+            sku_id_counter = 1
+
+        logging.info(f"Final sku_id_counter: {sku_id_counter}")
+
+        product_id_template = f"{datetime.datetime.now().strftime('%Y%m%d')}_{product_type}_{{counter:03d}}"
+        logging.debug(f"product_id_template: '{product_id_template}', initial sku_id_counter: {sku_id_counter}")
+
+        main_product_image = ""
+        if product_data.get('result', {}).get('result', {}).get('productImage', {}).get('images') and \
+           isinstance(product_data['result']['result']['productImage']['images'], list) and \
+           len(product_data['result']['result']['productImage']['images']) > 0:
+            main_product_image = product_data['result']['result']['productImage']['images'][0]
+        print(f"DEBUG: main_product_image: {main_product_image}")
+
+        product_attributes = {}
+        if product_data.get('result', {}).get('result', {}).get('productAttribute'):
+            for attr in product_data['result']['result']['productAttribute']:
+                if isinstance(attr, dict) and 'attributeId' in attr and 'valueTrans' in attr:
+                    product_attributes[str(attr['attributeId'])] = str(attr['valueTrans'])
+        print(f"DEBUG: product_attributes: {product_attributes}")
+
+        # --- MOQ Filtering for priceRangeList to create price_tiers_to_process --- 
+        price_tiers_to_process = []
+        original_price_range_list = product_data.get('result', {}).get('result', {}).get('productSaleInfo', {}).get('priceRangeList', []) 
+        print(f"DEBUG: Original productSaleInfo.priceRangeList: {original_price_range_list}")
+
+        temp_parsed_price_ranges = []
         for tier in original_price_range_list:
             try:
-                tier_copy = tier.copy() # Work on a copy
+                tier_copy = tier.copy()
                 tier_copy['startQuantity'] = int(tier_copy['startQuantity'])
                 temp_parsed_price_ranges.append(tier_copy)
             except (ValueError, TypeError, KeyError):
-                print(f"DEBUG: Skipping tier due to invalid or missing 'startQuantity': {tier}")
-                continue # Skip tiers that can't be parsed
+                print(f"DEBUG: Skipping tier in priceRangeList due to invalid 'startQuantity': {tier}")
+                continue
         
-        # Sort by startQuantity to ensure correct logic for MOQ filtering
-        # Use .get() for robustness in key access, defaulting to infinity if somehow startQuantity is missing
         parsed_price_ranges = sorted(temp_parsed_price_ranges, key=lambda t: t.get('startQuantity', float('inf')))
+        print(f"DEBUG: Parsed and sorted price_ranges (from productSaleInfo): {parsed_price_ranges}")
 
-        if not parsed_price_ranges:
-            price_tiers_to_process.append({'moq': '', 'price1688': ''})
+        list_after_min_filter = []
+        if min_moq is not None:
+            s_active = None
+            for i, current_tier_data in enumerate(parsed_price_ranges):
+                current_tier_start_val = current_tier_data['startQuantity']
+                next_tier_start_val = parsed_price_ranges[i+1]['startQuantity'] if i + 1 < len(parsed_price_ranges) else float('inf')
+                if current_tier_start_val <= min_moq < next_tier_start_val:
+                    s_active = current_tier_start_val
+                    break
+            if s_active is None and parsed_price_ranges and min_moq < parsed_price_ranges[0]['startQuantity']:
+                s_active = parsed_price_ranges[0]['startQuantity'] 
+            if s_active is not None:
+                for tier_data_to_filter in parsed_price_ranges:
+                    if tier_data_to_filter['startQuantity'] >= s_active:
+                        list_after_min_filter.append(tier_data_to_filter)
         else:
-            list_after_min_filter = []
-            if min_moq is not None:
-                s_active = None
-                # Find the startQuantity of the tier whose range min_moq falls into
-                for i, current_tier_data in enumerate(parsed_price_ranges):
-                    current_tier_start_val = current_tier_data['startQuantity']
-                    next_tier_start_val = parsed_price_ranges[i+1]['startQuantity'] if i + 1 < len(parsed_price_ranges) else float('inf')
-                    
-                    if current_tier_start_val <= min_moq < next_tier_start_val:
-                        s_active = current_tier_start_val
-                        break
-                
-                # If min_moq is less than the start_quantity of the very first tier,
-                # it implies all tiers are effectively accessible. The 'active' tier is the first one.
-                if s_active is None and parsed_price_ranges and min_moq < parsed_price_ranges[0]['startQuantity']:
-                    s_active = parsed_price_ranges[0]['startQuantity'] 
-                
-                if s_active is not None:
-                    for tier_data_to_filter in parsed_price_ranges:
-                        if tier_data_to_filter['startQuantity'] >= s_active:
-                            list_after_min_filter.append(tier_data_to_filter)
-                # If s_active is None at this point (e.g., min_moq is very high, beyond all tiers, or parsed_price_ranges was initially empty),
-                # list_after_min_filter will remain empty, which correctly signifies no tiers meet the criteria.
-            else: # No min_moq filter
-                list_after_min_filter = list(parsed_price_ranges) # Use a copy
+            list_after_min_filter = list(parsed_price_ranges)
+        print(f"DEBUG: Price tiers after min_moq ({min_moq}) filter: {list_after_min_filter}")
 
-            filtered_price_range_list_final = []
-            if max_moq is not None:
-                for tier in list_after_min_filter:
-                    if tier['startQuantity'] <= max_moq:
-                        filtered_price_range_list_final.append(tier)
-            else: # No max_moq filter
-                filtered_price_range_list_final = list_after_min_filter
-            
-            if filtered_price_range_list_final:
-                for tier in filtered_price_range_list_final:
-                    price_tiers_to_process.append({
-                        'moq': str(tier.get('startQuantity', '')),
-                        'price1688': str(tier.get('price', ''))
-                    })
-            else: # Filters resulted in an empty list
-                price_tiers_to_process.append({'moq': '', 'price1688': ''})
-        # --- End MOQ Filtering --- 
+        filtered_price_range_list_final = []
+        if max_moq is not None:
+            for tier in list_after_min_filter:
+                if tier['startQuantity'] <= max_moq:
+                    filtered_price_range_list_final.append(tier)
+        else:
+            filtered_price_range_list_final = list(list_after_min_filter)
+        print(f"DEBUG: Price tiers after max_moq ({max_moq}) filter: {filtered_price_range_list_final}")
 
-        # Determine the starting SKU index based on existing data in the sheet
-        start_sku_index = 1
-        try:
-            range_to_get_ids = f"{sheet_name}!A1:A"
-            id_column_data = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_get_ids).execute()
-            all_id_values_in_col_A = id_column_data.get('values', [])
-            last_id_str = None
-            if all_id_values_in_col_A and len(all_id_values_in_col_A) > 1:
-                for row_idx in range(len(all_id_values_in_col_A) - 1, 0, -1):
-                    if all_id_values_in_col_A[row_idx] and all_id_values_in_col_A[row_idx][0]:
-                        potential_id = str(all_id_values_in_col_A[row_idx][0]).strip()
-                        if potential_id.lower() != EXPECTED_HEADER[0].lower(): 
-                            last_id_str = potential_id
-                            break 
-            if last_id_str:
-                parts = last_id_str.split('_')
-                # Check if the last part is a number (sequence), and potentially a product type before it
-                if len(parts) >= 2 and parts[-1].isdigit(): 
-                    current_max_seq = int(parts[-1])
-                    start_sku_index = current_max_seq + 1
-                    print(f"DEBUG: Found last ID '{last_id_str}', next SKU sequence starts at: {start_sku_index}")
-                else:
-                    print(f"DEBUG: Last ID '{last_id_str}' format not recognized for sequencing (expected ..._NNN). Defaulting SKU sequence to 1.")
+        if filtered_price_range_list_final:
+            for tier in filtered_price_range_list_final:
+                price_tiers_to_process.append({
+                    'moq': str(tier.get('startQuantity', '')),
+                    'price1688': str(tier.get('price', ''))
+                })
+        else:
+            # If no tiers match, or original list was empty, use product's direct price and minOrderQuantity if available
+            product_direct_price = str(product_data.get('result', {}).get('result', {}).get('productSaleInfo', {}).get('price', ''))
+            product_min_order_qty = str(product_data.get('result', {}).get('result', {}).get('minOrderQuantity', ''))
+            if product_direct_price and product_min_order_qty:
+                print(f"DEBUG: No price tiers matched MOQ. Using product direct price {product_direct_price} and minOrderQuantity {product_min_order_qty} as a fallback tier.")
+                price_tiers_to_process.append({'moq': product_min_order_qty, 'price1688': product_direct_price})
             else:
-                print("DEBUG: No existing data SKUs found or sheet is empty/header-only. Starting SKU sequence from 1.")
-        except HttpError as e:
-            print(f"DEBUG: API error when trying to read existing IDs for sequencing: {e}. Defaulting SKU sequence to 1.")
-        except Exception as e:
-            print(f"DEBUG: Non-API error during ID sequence processing: {e}. Defaulting SKU sequence to 1.")
+                print("DEBUG: No price tiers matched MOQ, and no product direct price/minOrderQuantity for fallback. Adding default empty tier.")
+                price_tiers_to_process.append({'moq': '', 'price1688': ''})
+        print(f"DEBUG: Final price_tiers_to_process after MOQ filtering and fallbacks: {price_tiers_to_process}")
 
-        # First, prepare all SKU information
-        sku_data = []
-        date_prefix = datetime.datetime.now().strftime("%Y%m%d")
-        
-        # SKU ID formatting based on product_type argument
-        if product_type:
-            product_type_prefix_str = product_type.lower()
-            product_id_template = f"{date_prefix}_{product_type_prefix_str}_{{counter:03d}}"
+        # --- Populate sku_data --- 
+        print(f"DEBUG: Before 'if not product_sku_infos' check. product_sku_infos is: {product_sku_infos} (len: {len(product_sku_infos) if product_sku_infos else 0})")
+
+        sku_data_final_rows = []
+
+        if not product_sku_infos: # Case: No SKUs found, use product-level data
+            print("DEBUG: Entered 'if not product_sku_infos' block (product-level data path).")
+            
+            # Define product_default_moq for the no-SKU path
+            product_min_order_qty_str = data.get('result', {}).get('result', {}).get('minOrderQuantity', "1")
+            try:
+                product_default_moq = int(product_min_order_qty_str)
+            except ValueError:
+                print(f"DEBUG: Warning: Could not parse product minOrderQuantity '{product_min_order_qty_str}' for no-SKU path. Defaulting to 1.")
+                product_default_moq = 1
+
+            # Define main_product_image_formula here for the no-SKU path, before the loop
+            main_product_image_formula = f'=HYPERLINK("{main_product_image}", IMAGE("{main_product_image}"))' if main_product_image else ""
+
+            if not price_tiers_to_process: 
+                print("DEBUG: No SKUs and no product-level price tiers. Cannot determine data to upload.")
+            else:
+                for tier_index, tier in enumerate(price_tiers_to_process):
+                    sku_id_counter += 1 # Increment for each product-level tier row
+                    product_id_val = product_id_template.format(counter=sku_id_counter)
+                    
+                    product_info_str = data.get('result', {}).get('result', {}).get('subjectTrans', data.get('result', {}).get('result', {}).get('subject', 'N/A'))
+                    material, material_source = get_material_info(data, product_attributes)
+
+                    row_data = {
+                        'id': product_id_val,
+                        'image': main_product_image_formula, # Now defined
+                        'price1688': tier.get('price1688', 'N/A'),
+                        'moq': tier.get('moq', str(product_default_moq)), # Now defined
+                        'info': product_info_str, 
+                        'material': material,
+                        'link': cleaned_source_url
+                    }
+                    sku_data_final_rows.append(row_data)
+                print(f"DEBUG: sku_data_final_rows after processing product-level tiers: {sku_data_final_rows}")
+
+        else: # Case: SKUs exist
+            print(f"DEBUG: Entered 'else' block (SKUs exist path). Processing {len(product_sku_infos)} SKUs.")
+            # Determine product_default_moq once for SKU path
+            product_min_order_qty_str = data.get('result', {}).get('result', {}).get('minOrderQuantity', "1")
+            try:
+                product_default_moq = int(product_min_order_qty_str)
+            except ValueError:
+                print(f"Warning: Could not parse product minOrderQuantity '{product_min_order_qty_str}' as int. Defaulting to 1.")
+                product_default_moq = 1
+
+            for sku_index, sku in enumerate(product_sku_infos):
+                sku_id_counter += 1
+                sku_id_val = product_id_template.format(counter=sku_id_counter)
+
+                sku_attributes_list = sku.get('skuAttributes', [])
+                sku_info_parts = []
+                sku_image_url_for_sku = main_product_image # Fallback to main product image for this SKU
+
+                for attr in sku_attributes_list:
+                    attr_name = attr.get('attributeNameTrans', attr.get('attributeName', 'N/A'))
+                    attr_value = attr.get('valueTrans', attr.get('value', 'N/A'))
+                    sku_info_parts.append(f"{attr_name}: {attr_value}")
+                    if attr.get('skuImageUrl'): # If SKU has specific image, use it
+                        sku_image_url_for_sku = attr.get('skuImageUrl')
+                
+                sku_info_str = ", ".join(sku_info_parts) if sku_info_parts else "N/A"
+                image_formula = f'=HYPERLINK("{sku_image_url_for_sku}", IMAGE("{sku_image_url_for_sku}"))' if sku_image_url_for_sku else ""
+                
+                sku_price = sku.get('price')
+                if sku_price is None:
+                    print(f"DEBUG: SKU {sku.get('skuId', 'N/A')} has no price, skipping.")
+                    continue
+
+                material, material_source = get_material_info(data, product_attributes, sku_attributes_list)
+
+                row_data = {
+                    'id': sku_id_val,
+                    'image': image_formula,
+                    'price1688': str(sku_price),  # Use SKU's own price
+                    'moq': str(product_default_moq),  # Use product's default MOQ
+                    'info': sku_info_str,
+                    'material': material,
+                    'link': cleaned_source_url
+                }
+                sku_data_final_rows.append(row_data)
+            
+            print(f"DEBUG: sku_data after processing all SKUs: {sku_data_final_rows}")
+
+        # Filter the collected sku_data_final_rows by MOQ (user-defined filters)
+        if min_moq is not None or max_moq is not None:
+            print(f"DEBUG: Before SKU-level MOQ filtering. min_moq: {min_moq}, max_moq: {max_moq}. Current sku_data: {sku_data_final_rows}")
+            sku_data_final_rows = filter_skus_by_moq(sku_data_final_rows, min_moq, max_moq, data) # Pass 'data' for product_level_data
+            print(f"DEBUG: After SKU-level MOQ filtering. Filtered sku_data: {sku_data_final_rows}")
         else:
-            product_id_template = f"{date_prefix}_{{counter:03d}}"
-        
-        sku_id_counter = start_sku_index
-        
-        # First pass: collect all SKU data
-        for sku_info in product_sku_infos:
-            item_id = product_id_template.format(counter=sku_id_counter)
-            
-            # Get SKU image URL
-            sku_image_url = ''
-            if sku_info.get('skuAttributes') and isinstance(sku_info['skuAttributes'], list) and len(sku_info['skuAttributes']) > 0:
-                for attr in sku_info['skuAttributes']:
-                    if isinstance(attr, dict) and attr.get('skuImageUrl'):
-                        sku_image_url = attr.get('skuImageUrl', '').strip()
-                        break
-            
-            image_formula = ''
-            if sku_image_url:
-                image_formula = f'=HYPERLINK("{sku_image_url}", IMAGE("{sku_image_url}"))'
-            
-            # Get SKU direct price if available
-            sku_direct_price = str(sku_info['price']) if sku_info.get('price') else None
-            
-            # Get SKU info text from attribute 3216
-            sku_info_text = ""
-            if sku_info.get('skuAttributes') and isinstance(sku_info['skuAttributes'], list):
-                for attr in sku_info['skuAttributes']:
-                    if isinstance(attr, dict) and attr.get('attributeId') == 3216 and 'valueTrans' in attr:
-                        sku_info_text = str(attr['valueTrans'])
-                        break
-            
-            sku_data.append({
-                'id': item_id,
-                'image': image_formula,
-                'info': sku_info_text,
-                'direct_price': sku_direct_price,
-                'link': source_url
-            })
-            
-            sku_id_counter += 1
-        
-        # Second pass: create rows grouped by price/moq
+            print(f"DEBUG: SKU-level MOQ filtering skipped (no SKUs to filter or no MOQ params).")
+
+        if not sku_data_final_rows:
+            print("DEBUG: sku_data_final_rows is empty after all processing and filtering. No data to upload.")
+            print("No SKUs found after filtering by MOQ or no initial product/SKU data.")
+            return
+
+        # --- Second pass: create rows_to_append based on sku_data_final_rows --- 
         rows_to_append = []
         price_moq_groups = []
         
-        # Process each price/moq tier
-        for tier_data in price_tiers_to_process:
-            moq = tier_data['moq']
-            price = tier_data['price1688']
-            
-            # Add all SKUs for this price/moq tier
-            for sku in sku_data:
-                # Use SKU direct price if available, otherwise use the tier price
-                price_to_use = sku['direct_price'] if sku['direct_price'] else price
-                
-                # Ensure price is properly formatted as a number if it exists
-                try:
-                    price_value = float(price_to_use) if price_to_use else 0
-                except (ValueError, TypeError):
-                    price_value = 0
-                
+        if not sku_data_final_rows:
+            logging.info("sku_data_final_rows is empty. No data will be appended to the sheet.")
+            # Ensure last_id_row is defined even if no data is appended, for consistency
+            # if 'last_id_row' not in locals(): # This check might be redundant now
+            #     last_id_row = header_row_index # Default if not determined earlier
+        else:
+            logging.debug(f"Before final row generation. sku_data_final_rows has {len(sku_data_final_rows)} items: {sku_data_final_rows[:3]}") # Log first 3 for brevity
+            for item_data in sku_data_final_rows:
                 row = [
-                    sku['id'],  # A: ID
-                    sku['image'],  # B: Photo
-                    price_value,  # C: price 1688 (as number for currency formatting)
-                    "",  # D: price cust (empty)
-                    "",  # E: profit (empty)
-                    int(moq) if moq and moq.isdigit() else moq,  # F: MOQ (as number if possible)
-                    sku['info'],  # G: info
-                    sku['link']  # H: link
+                    item_data.get('id', ''),
+                    item_data.get('image', ''),
+                    try_convert_to_float(item_data.get('price1688', '')),
+                    '',  # Placeholder for 'Price USD'
+                    '',  # Placeholder for 'Landed Cost'
+                    item_data.get('moq', ''),
+                    item_data.get('info', ''),
+                    item_data.get('material', ''),
+                    item_data.get('link', '')
                 ]
                 rows_to_append.append(row)
+            logging.debug(f"Generated {len(rows_to_append)} rows for rows_to_append. First 3: {rows_to_append[:3]}")
             
-            # Track the number of rows for this price/moq group for merging
-            if sku_data:  # Only add if there are SKUs
+            # Rebuild price_moq_groups based on the final rows_to_append and their MOQs
+            # This is critical for correct merging if rows_to_append was modified (e.g., by filtering)
+            current_moq = None
+            current_count = 0
+            start_idx_in_batch = 0 # This will be relative to the start of the current batch being appended
+            
+            for i, row_data in enumerate(rows_to_append):
+                moq_in_row = row_data[5] # Assuming MOQ is at index 5
+                if moq_in_row != current_moq:
+                    if current_moq is not None: # Save the previous group
+                        end_row = start_idx_in_batch + current_count - 1
+                        price_moq_groups.append({
+                            'moq': current_moq, 
+                            'count': current_count, 
+                            'start_idx_in_batch': start_idx_in_batch,
+                            'start_row': start_idx_in_batch,
+                            'end_row': end_row
+                        })
+                    current_moq = moq_in_row
+                    current_count = 1
+                    start_idx_in_batch = i 
+                else:
+                    current_count += 1
+            
+            if current_moq is not None: # Save the last group
+                end_row = start_idx_in_batch + current_count - 1
                 price_moq_groups.append({
-                    'start_row': len(rows_to_append) - len(sku_data),
-                    'end_row': len(rows_to_append),
-                    'moq': moq
+                    'moq': current_moq, 
+                    'count': current_count, 
+                    'start_idx_in_batch': start_idx_in_batch,
+                    'start_row': start_idx_in_batch,
+                    'end_row': end_row
                 })
+            logging.debug(f"price_moq_groups for merging: {price_moq_groups}")
 
-        if not rows_to_append:
-            print("No data processed to upload.")
+        if rows_to_append:
+            # Determine the starting row for appending new data.
+            # This should be the first empty row after the last data row.
+            # last_id_row is the row number of the last data entry, or header_row_index if no data exists.
+            start_row_for_new_data = last_id_row + 1
+            
+            append_range = f'{sheet_name}!A{start_row_for_new_data}'
+            logging.info(f"Appending {len(rows_to_append)} rows to range: {append_range}")
+        else:
+            print("DEBUG: rows_to_append is empty after trying to generate rows. No data will be uploaded.")
+            print("No data processed to upload (rows_to_append is empty).")
             return
-
-        # DEBUG: Print the first few rows to be appended
-        print(f"DEBUG: rows_to_append (first 3 rows): {rows_to_append[:3]}")
 
         # Append data after the header (assuming header is row 1)
         # The append operation will add data starting at the first empty row it finds.
@@ -407,8 +742,8 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                                 'mergeCells': {
                                     'range': {
                                         'sheetId': sheet_id_val,
-                                        'startRowIndex': actual_start_row_1_indexed - 1 + group['start_row'],
-                                        'endRowIndex': actual_start_row_1_indexed - 1 + group['end_row'],
+                                        'startRowIndex': actual_start_row_1_indexed - 1 + group['start_idx_in_batch'],
+                                        'endRowIndex': actual_start_row_1_indexed - 1 + group['start_idx_in_batch'] + group['count'],
                                         'startColumnIndex': 5,  # MOQ column (F)
                                         'endColumnIndex': 6     # End at column G (exclusive)
                                     },
@@ -416,15 +751,36 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                                 }
                             })
                             
-                            # Also merge the link column (index 7, column H) for each price/moq group
+                            # Check if we should merge material cells (only if material is from product level)
+                            should_merge_material = all(
+                                sku_data_final_rows[i].get('material_source') == 'product' 
+                                for i in range(group['start_idx_in_batch'], group['start_idx_in_batch'] + group['count'])
+                                if i < len(sku_data_final_rows)
+                            )
+                            
+                            if should_merge_material:
+                                merge_requests.append({
+                                    'mergeCells': {
+                                        'range': {
+                                            'sheetId': sheet_id_val,
+                                            'startRowIndex': actual_start_row_1_indexed - 1 + group['start_idx_in_batch'],
+                                            'endRowIndex': actual_start_row_1_indexed - 1 + group['start_idx_in_batch'] + group['count'],
+                                            'startColumnIndex': 7,  # Material column (H)
+                                            'endColumnIndex': 8     # End at column I (exclusive)
+                                        },
+                                        'mergeType': 'MERGE_ALL'
+                                    }
+                                })
+                            
+                            # Also merge the link column (index 8, column I) for each price/moq group
                             merge_requests.append({
                                 'mergeCells': {
                                     'range': {
                                         'sheetId': sheet_id_val,
-                                        'startRowIndex': actual_start_row_1_indexed - 1 + group['start_row'],
-                                        'endRowIndex': actual_start_row_1_indexed - 1 + group['end_row'],
-                                        'startColumnIndex': 7,  # Link column (H)
-                                        'endColumnIndex': 8     # End at column I (exclusive)
+                                        'startRowIndex': actual_start_row_1_indexed - 1 + group['start_idx_in_batch'],
+                                        'endRowIndex': actual_start_row_1_indexed - 1 + group['start_idx_in_batch'] + group['count'],
+                                        'startColumnIndex': 8,  # Link column (I)
+                                        'endColumnIndex': 9     # End at column J (exclusive)
                                     },
                                     'mergeType': 'MERGE_ALL'
                                 }
@@ -432,15 +788,13 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                     
                     if merge_requests:
                         service.spreadsheets().batchUpdate(
-                            spreadsheetId=spreadsheet_id, 
-                            body={'requests': merge_requests}
-                        ).execute()
+                            spreadsheetId=spreadsheet_id, body={'requests': merge_requests}).execute()
                         print(f"Successfully merged MOQ cells for {len(merge_requests)} price/moq groups.")
                     # --- End Cell Merges ---
 
-                    # --- Set Row Height to 400px for each SKU ---
+                    # --- Set Row Height to 200px for each SKU ---
                     row_height_requests = []
-                    TARGET_ROW_HEIGHT = 400  # 400px per SKU row
+                    TARGET_ROW_HEIGHT = 200  # 200px per SKU row
                     
                     # Apply height to all rows
                     row_height_requests.append({
@@ -451,22 +805,57 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                                 'startIndex': actual_start_row_1_indexed - 1,
                                 'endIndex': actual_start_row_1_indexed - 1 + len(rows_to_append)
                             },
-                            'properties': {'pixelSize': TARGET_ROW_HEIGHT // 2},  # Halved due to API rendering quirk
+                            'properties': {'pixelSize': TARGET_ROW_HEIGHT},
+                            'fields': 'pixelSize'
+                        }
+                    })
+                    
+                    # Set column widths for material and link columns
+                    column_width_requests = []
+                    
+                    # Material column (H, index 7) - 100px
+                    column_width_requests.append({
+                        'updateDimensionProperties': {
+                            'range': {
+                                'sheetId': sheet_id_val,
+                                'dimension': 'COLUMNS',
+                                'startIndex': 7,  # Column H (material)
+                                'endIndex': 8
+                            },
+                            'properties': {'pixelSize': 100},
+                            'fields': 'pixelSize'
+                        }
+                    })
+                    
+                    # Link column (I, index 8) - 300px
+                    column_width_requests.append({
+                        'updateDimensionProperties': {
+                            'range': {
+                                'sheetId': sheet_id_val,
+                                'dimension': 'COLUMNS',
+                                'startIndex': 8,  # Column I (link)
+                                'endIndex': 9
+                            },
+                            'properties': {'pixelSize': 300},
                             'fields': 'pixelSize'
                         }
                     })
                     
                     if row_height_requests:
                         service.spreadsheets().batchUpdate(
-                            spreadsheetId=spreadsheet_id, 
-                            body={'requests': row_height_requests}
-                        ).execute()
+                            spreadsheetId=spreadsheet_id, body={'requests': row_height_requests}).execute()
                         print(f"Set consistent row height of {TARGET_ROW_HEIGHT}px for all rows.")
+                    
+                    if column_width_requests:
+                        service.spreadsheets().batchUpdate(
+                            spreadsheetId=spreadsheet_id, body={'requests': column_width_requests}).execute()
+                        print("Set column widths: Material=100px, Link=300px.")
                     # --- Apply Final Cell Formatting (Alignment, Currency, Formulas) ---
                     formatting_requests = []
                     actual_end_row_1_indexed = (actual_start_row_1_indexed - 1) + len(rows_to_append)
 
                     # 0. Set default formatting for all cells (centered, not bold, wrapped text)
+                    num_columns = len(EXPECTED_HEADER)  # Dynamically get number of columns
                     formatting_requests.append({
                         'repeatCell': {
                             'range': {
@@ -474,7 +863,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                                 'startRowIndex': actual_start_row_1_indexed - 1,
                                 'endRowIndex': actual_end_row_1_indexed,
                                 'startColumnIndex': 0,  # Column A
-                                'endColumnIndex': 8  # Column H
+                                'endColumnIndex': num_columns  # All columns dynamically
                             },
                             'cell': {
                                 'userEnteredFormat': {
@@ -698,7 +1087,7 @@ if __name__ == '__main__':
         # if GOOGLE_SHEET_ID:
         #     try:
         #         service = get_google_sheets_service()
-        #         target_sheet_id_val = get_sheet_id(service, GOOGLE_SHEET_ID, TARGET_SHEET_NAME)
+        #         target_sheet_id_val = get_sheet(service, GOOGLE_SHEET_ID, TARGET_SHEET_NAME)
         #         if target_sheet_id_val is not None:
         #             ensure_header_and_freeze(service, GOOGLE_SHEET_ID, TARGET_SHEET_NAME, target_sheet_id_val)
         #         else:

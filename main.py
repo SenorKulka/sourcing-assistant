@@ -41,16 +41,19 @@ def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_i
         print(f"INFO: min_moq was not provided, defaulting to {min_moq}")
 
     if not LOVBUY_API_KEY:
-        print("Error: LOVBUY_API_KEY not found in environment variables.")
-        return {"error": "Server configuration error: LOVBUY_API_KEY not set."}, 500
+        error_msg = "Server configuration error: LOVBUY_API_KEY not set."
+        print(f"Error: {error_msg}")
+        return {"error": error_msg}, 500
 
     if not google_sheet_id: 
-        print("Error: Google Sheet ID was not provided or could not be parsed.")
-        return {"error": "Client error: Google Sheet ID is missing or invalid."}, 400
+        error_msg = "Client error: Google Sheet ID is missing or invalid."
+        print(f"Error: {error_msg}")
+        return {"error": error_msg}, 400
 
     if not GOOGLE_APPLICATION_CREDENTIALS:
-        print("Error: GOOGLE_APPLICATION_CREDENTIALS not found in environment variables.")
-        return {"error": "Server configuration error: GOOGLE_APPLICATION_CREDENTIALS not set."}, 500
+        error_msg = "Server configuration error: GOOGLE_APPLICATION_CREDENTIALS not set."
+        print(f"Error: {error_msg}")
+        return {"error": error_msg}, 500
 
     lovbuy = LovbuyClient(LOVBUY_API_KEY)
     response_data = {}
@@ -114,14 +117,14 @@ def handle_api_process():
     if not data:
         return jsonify({"error": "Invalid JSON payload"}), 400
 
-    url = data.get('url')
+    urls = data.get('url', '').split()  # Split by any whitespace
     product_name = data.get('productName')
     min_moq_str = data.get('minMoq')
     max_moq_str = data.get('maxMoq')
     gsheet_link_or_id = data.get('gsheetLink')
 
-    if not url:
-        return jsonify({"error": "Missing 'url' in request"}), 400
+    if not urls:
+        return jsonify({"error": "No URLs provided in the request"}), 400
     if not product_name: 
         print("Warning: 'productName' is missing or empty in the request.")
 
@@ -135,8 +138,29 @@ def handle_api_process():
     except ValueError:
         return jsonify({"error": "Invalid 'minMoq' or 'maxMoq' value. Must be an integer."}), 400
 
-    response, status = process_sourcing_request(url, product_name, min_moq, max_moq, parsed_google_sheet_id)
-    return jsonify(response), status
+    # Process all URLs and collect responses
+    responses = []
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
+            
+        response, status = process_sourcing_request(url, product_name, min_moq, max_moq, parsed_google_sheet_id)
+        responses.append({
+            "url": url,
+            "status": "success" if status == 200 else "error",
+            "message": response.get("message") or response.get("error"),
+            "status_code": status
+        })
+    
+    # Check if all requests were successful
+    all_success = all(r["status"] == "success" for r in responses)
+    status_code = 200 if all_success else 207  # 207 Multi-Status if some failed
+    
+    return jsonify({
+        "results": responses,
+        "message": f"Processed {len(responses)} URLs" + ("" if all_success else " (some failed)")
+    }), status_code
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
