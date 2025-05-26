@@ -663,11 +663,14 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         else:
             logging.debug(f"Before final row generation. sku_data_final_rows has {len(sku_data_final_rows)} items: {sku_data_final_rows[:3]}") # Log first 3 for brevity
             for item_data in sku_data_final_rows:
+                price_1688 = try_convert_to_float(item_data.get('price1688', ''))
+                price_cust = round(price_1688 * 1.15, 1) if price_1688 != '' else ''
+                
                 row = [
                     item_data.get('id', ''),
                     item_data.get('image', ''),
-                    try_convert_to_float(item_data.get('price1688', '')),
-                    '',  # Placeholder for 'Price USD'
+                    price_1688,
+                    price_cust,  # Calculated as price_1688 * 1.15, rounded to 1 decimal
                     '',  # Placeholder for 'Landed Cost'
                     item_data.get('moq', ''),
                     item_data.get('info', ''),
