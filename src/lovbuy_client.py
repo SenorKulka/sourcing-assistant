@@ -28,16 +28,32 @@ class LovbuyClient:
         try:
             response = requests.request(method, url, params=params, json=data, headers=headers)
             print(f"Response Status Code: {response.status_code}")
-            response.raise_for_status() 
-            return response.json() 
+            
+            # Try to parse JSON response regardless of status code
+            try:
+                json_response = response.json()
+                print(f"Response JSON: {json_response}")
+                
+                # If status code indicates success, return the response
+                if response.status_code == 200:
+                    return json_response
+                
+                # If status code indicates error, but we have JSON response, 
+                # return it so the error details can be processed
+                return json_response
+                
+            except ValueError as json_err:
+                print(f"JSON decode error: {json_err}")
+                print(f"Response content: {response.text}")
+                # If we can't parse JSON, raise the HTTP error
+                response.raise_for_status()
+                
         except requests.exceptions.HTTPError as http_err:
             print(f"HTTP error occurred: {http_err}")
             print(f"Response content: {response.text}") 
         except requests.exceptions.RequestException as req_err:
             print(f"Request exception occurred: {req_err}")
-        except ValueError as json_err: 
-            print(f"JSON decode error: {json_err}")
-            print(f"Response content: {response.text}") 
+            
         return None
 
     def _extract_item_id_from_url(self, product_url):

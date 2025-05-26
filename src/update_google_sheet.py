@@ -318,6 +318,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 "rows_uploaded": 0,
                 "skus_found": 0,
                 "skus_after_filter": 0,
+                "price_tiers_count": 0,
                 "error": error_msg
             }
             
@@ -546,8 +547,8 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 logger.error(f"No data found in {product_data_path} or file is empty. Cannot determine data to upload.")
             else:
                 for tier_index, tier in enumerate(price_tiers_to_process):
-                    sku_id_counter += 1 # Increment for each product-level tier row
                     product_id_val = product_id_template.format(counter=sku_id_counter)
+                    sku_id_counter += 1
                     
                     product_info_str = data.get('result', {}).get('result', {}).get('subjectTrans', data.get('result', {}).get('result', {}).get('subject', 'N/A'))
                     material, material_source = get_material_info(data, product_attributes)
@@ -575,8 +576,8 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 product_default_moq = 1
 
             for sku_index, sku in enumerate(product_sku_infos):
-                sku_id_counter += 1
                 sku_id_val = product_id_template.format(counter=sku_id_counter)
+                sku_id_counter += 1
 
                 sku_attributes_list = sku.get('skuAttributes', [])
                 sku_info_parts = []
@@ -628,6 +629,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 "rows_uploaded": 0,
                 "skus_found": len(product_sku_infos) if product_sku_infos else 0,
                 "skus_after_filter": 0,
+                "price_tiers_count": len(price_tiers_to_process) if 'price_tiers_to_process' in locals() else 0,
                 "error": "No SKUs found after filtering by MOQ or no initial product/SKU data."
             }
 
@@ -711,6 +713,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 "rows_uploaded": 0,
                 "skus_found": len(product_sku_infos) if product_sku_infos else 0,
                 "skus_after_filter": 0,
+                "price_tiers_count": len(price_tiers_to_process) if 'price_tiers_to_process' in locals() else 0,
                 "error": "No data processed to upload (rows_to_append is empty)."
             }
 
@@ -1009,6 +1012,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         "rows_uploaded": len(rows_to_append),
         "skus_found": len(product_sku_infos) if product_sku_infos else 0,
         "skus_after_filter": len(sku_data_final_rows),
+        "price_tiers_count": len(price_tiers_to_process) if 'price_tiers_to_process' in locals() else 0,
         "price_moq_groups": price_moq_groups
     }
 

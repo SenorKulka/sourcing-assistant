@@ -165,9 +165,34 @@
                         const result = await response.json();
 
                         if (response.ok) {
-                            resultsHTML += `<p style="color: green; margin: 10px 0; padding: 8px; background-color: #f0f8f0; border-left: 4px solid green;">${result.message || 'Done.'}</p>`;
+                            // Handle the new response structure with results array
+                            if (result.results && result.results.length > 0) {
+                                const urlResult = result.results[0]; // Get the first (and only) result
+                                if (urlResult.status === "success") {
+                                    // Check if this is a warning message (starts with ⚠️ Processing completed with issues)
+                                    const message = urlResult.message || 'Done.';
+                                    const isWarning = message.startsWith("⚠️ Processing completed with issues");
+                                    const bgColor = isWarning ? "#fff8e1" : "#f0f8f0";
+                                    const borderColor = isWarning ? "orange" : "green";
+                                    const textColor = isWarning ? "orange" : "green";
+                                    
+                                    resultsHTML += `<p style="color: ${textColor}; margin: 10px 0; padding: 8px; background-color: ${bgColor}; border-left: 4px solid ${borderColor};">${message}</p>`;
+                                } else {
+                                    resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${urlResult.message || 'Unknown error'}</p>`;
+                                    allSuccessful = false;
+                                }
+                            } else {
+                                // Fallback to old structure
+                                resultsHTML += `<p style="color: green; margin: 10px 0; padding: 8px; background-color: #f0f8f0; border-left: 4px solid green;">${result.message || 'Done.'}</p>`;
+                            }
                         } else {
-                            resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${result.error || 'Unknown error'}</p>`;
+                            // Handle error responses
+                            if (result.results && result.results.length > 0) {
+                                const urlResult = result.results[0];
+                                resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${urlResult.message || 'Unknown error'}</p>`;
+                            } else {
+                                resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${result.error || 'Unknown error'}</p>`;
+                            }
                             allSuccessful = false;
                         }
                     } catch (error) {

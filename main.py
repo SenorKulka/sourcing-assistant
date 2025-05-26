@@ -68,6 +68,23 @@ def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_i
         product_info = lovbuy.get_product_info_from_1688_url(url)
 
         if product_info:
+            # Check if the API response contains an error
+            if 'status' in product_info and product_info['status'] != 200:
+                error_message = f"❌ API Error: {product_info.get('message', 'Unknown API error')}"
+                if 'status' in product_info:
+                    error_message += f"\nFull response: {product_info}"
+                print(error_message)
+                response_data = {
+                    "error": error_message,
+                    "rows_uploaded": 0,
+                    "skus_found": 0,
+                    "skus_after_filter": 0,
+                    "price_tiers_count": 0,
+                    "product_name": ''
+                }
+                status_code = 400
+                return response_data, status_code
+            
             print(f"Successfully fetched product data from LovBuy for URL: {url}")
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json', encoding='utf-8') as tmp_file:
                 json.dump(product_info, tmp_file, ensure_ascii=False, indent=2)
@@ -88,16 +105,43 @@ def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_i
                 
                 # Create detailed success message with statistics
                 if stats and not stats.get('error'):
-                    message = f"✅ Successfully processed '{stats['product_name']}' - {stats['skus_found']} SKUs found → {stats['skus_after_filter']} after filtering → {stats['rows_uploaded']} uploaded to Google Sheet"
+                    skus_found = stats['skus_found']
+                    skus_after_filter = stats['skus_after_filter']
+                    rows_uploaded = stats['rows_uploaded']
+                    price_tiers = stats.get('price_tiers_count', 0)
+                    
+                    if skus_found > 0:
+                        # SKU-based product
+                        message = f"✅ Successfully processed '{stats['product_name']}' - {skus_found} SKUs found → {skus_after_filter} after filtering → {rows_uploaded} uploaded to Google Sheet"
+                    else:
+                        # Price-tier-based product (no individual SKUs)
+                        if price_tiers > 0:
+                            message = f"✅ Successfully processed '{stats['product_name']}' - {price_tiers} price variations found → {rows_uploaded} uploaded to Google Sheet"
+                        else:
+                            message = f"✅ Successfully processed '{stats['product_name']}' - {rows_uploaded} variants uploaded to Google Sheet"
                 else:
                     message = f"⚠️ Processing completed with issues for '{stats.get('product_name', 'Unknown Product')}': {stats.get('error', 'Unknown error')}"
                 
-                response_data = {"message": message}
+                response_data = {
+                    "message": message,
+                    "rows_uploaded": stats.get('rows_uploaded', 0),
+                    "skus_found": stats.get('skus_found', 0),
+                    "skus_after_filter": stats.get('skus_after_filter', 0),
+                    "price_tiers_count": stats.get('price_tiers_count', 0),
+                    "product_name": stats.get('product_name', '')
+                }
                 print(message)
             except Exception as e_sheet:
                 error_message = f"An error occurred during Google Sheet update for {url}: {e_sheet}"
                 print(error_message)
-                response_data = {"error": error_message}
+                response_data = {
+                    "error": error_message,
+                    "rows_uploaded": 0,
+                    "skus_found": 0,
+                    "skus_after_filter": 0,
+                    "price_tiers_count": 0,
+                    "product_name": ''
+                }
                 status_code = 500
             finally:
                 if os.path.exists(temp_product_data_path):
@@ -107,13 +151,27 @@ def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_i
         else:
             error_message = f"Failed to retrieve product information from LovBuy for URL: {url}"
             print(error_message)
-            response_data = {"error": error_message}
+            response_data = {
+                "error": error_message,
+                "rows_uploaded": 0,
+                "skus_found": 0,
+                "skus_after_filter": 0,
+                "price_tiers_count": 0,
+                "product_name": ''
+            }
             status_code = 400
 
     except Exception as e_lovbuy:
         error_message = f"An error occurred while fetching product data from LovBuy for {url}: {e_lovbuy}"
         print(error_message)
-        response_data = {"error": error_message}
+        response_data = {
+            "error": error_message,
+            "rows_uploaded": 0,
+            "skus_found": 0,
+            "skus_after_filter": 0,
+            "price_tiers_count": 0,
+            "product_name": ''
+        }
         status_code = 500
     
     return response_data, status_code
@@ -157,10 +215,17 @@ def handle_api_process():
             continue
             
         response, status = process_sourcing_request(url, product_name, min_moq, max_moq, parsed_google_sheet_id)
+        
+        # Extract statistics from the response if available
+        stats = response if isinstance(response, dict) and not response.get("error") else {}
+        
         responses.append({
             "url": url,
             "status": "success" if status == 200 else "error",
             "message": response.get("message") or response.get("error"),
+            "rows_uploaded": stats.get("rows_uploaded", 0),
+            "skus_found": stats.get("skus_found", 0),
+            "price_tiers_count": stats.get("price_tiers_count", 0),
             "status_code": status
         })
     
