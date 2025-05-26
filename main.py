@@ -2,10 +2,15 @@ import os
 import json
 import tempfile
 import re
+import logging
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory
 from src.lovbuy_client import LovbuyClient
 from src.update_google_sheet import run_sheet_update
+from src.logging_config import setup_logging
+
+# Set up logging
+logger = setup_logging()
 
 load_dotenv(override=True)
 
@@ -29,16 +34,16 @@ def extract_sheet_id_from_url(url_string):
     if re.fullmatch(r'[a-zA-Z0-9-_]{44}', url_string):
          return url_string
          
-    print(f"Warning: Could not parse a valid Google Sheet ID from '{url_string}'. It might be an invalid URL or ID format.")
+    logger.warning(f"Could not parse a valid Google Sheet ID from '{url_string}'. It might be an invalid URL or ID format.")
     return None
 
 def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_id):
-    print(f"Sourcing Assistant Backend: Processing URL: {url} for product: {product_name}, MOQ: {min_moq}-{max_moq}, Sheet ID: {google_sheet_id}")
+    logger.info(f"Processing URL: {url} for product: {product_name}, MOQ: {min_moq}-{max_moq}, Sheet ID: {google_sheet_id}")
 
     # Default min_moq to 120 if not provided
     if min_moq is None:
         min_moq = 120
-        print(f"INFO: min_moq was not provided, defaulting to {min_moq}")
+        logger.info(f"min_moq was not provided, defaulting to {min_moq}")
 
     if not LOVBUY_API_KEY:
         error_msg = "Server configuration error: LOVBUY_API_KEY not set."
@@ -132,7 +137,7 @@ def handle_api_process():
     if not urls:
         return jsonify({"error": "No URLs provided in the request"}), 400
     if not product_name: 
-        print("Warning: 'productName' is missing or empty in the request.")
+        logger.info("Starting processing...")
 
     parsed_google_sheet_id = extract_sheet_id_from_url(gsheet_link_or_id)
     if not parsed_google_sheet_id:

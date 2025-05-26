@@ -8,6 +8,9 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
 # --- Configuration ---
 load_dotenv(override=True)
 
@@ -15,8 +18,8 @@ load_dotenv(override=True)
 # GOOGLE_SHEET_ID_FROM_ENV = os.getenv("GOOGLE_SHEET_ID") # No longer primary source for run_sheet_update
 GOOGLE_CREDENTIALS_PATH_FROM_ENV = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-# print(f"DEBUG: GOOGLE_SHEET_ID from .env (raw): {{GOOGLE_SHEET_ID_FROM_ENV}}") # Commented out
-print(f"DEBUG: GOOGLE_APPLICATION_CREDENTIALS from .env (raw): {GOOGLE_CREDENTIALS_PATH_FROM_ENV}")
+# logger.debug(f"GOOGLE_SHEET_ID from .env (raw): {{GOOGLE_SHEET_ID_FROM_ENV}}") # Commented out
+logger.debug(f"GOOGLE_APPLICATION_CREDENTIALS from .env (raw): {GOOGLE_CREDENTIALS_PATH_FROM_ENV}")
 
 # Global GOOGLE_SHEET_ID processing is removed as run_sheet_update will take it as a parameter.
 # GOOGLE_SHEET_ID = None # Ensuring it's not used globally by mistake.
@@ -27,13 +30,13 @@ print(f"DEBUG: GOOGLE_APPLICATION_CREDENTIALS from .env (raw): {GOOGLE_CREDENTIA
 if GOOGLE_CREDENTIALS_PATH_FROM_ENV and GOOGLE_CREDENTIALS_PATH_FROM_ENV.startswith('./'):
     # Construct absolute path from CWD. Note: os.path.abspath handles './' correctly.
     GOOGLE_CREDENTIALS_PATH = os.path.abspath(GOOGLE_CREDENTIALS_PATH_FROM_ENV)
-    print(f"DEBUG: Resolved GOOGLE_APPLICATION_CREDENTIALS (relative to CWD): {GOOGLE_CREDENTIALS_PATH}")
+    logger.debug(f"Resolved GOOGLE_APPLICATION_CREDENTIALS (relative to CWD): {GOOGLE_CREDENTIALS_PATH}")
 elif GOOGLE_CREDENTIALS_PATH_FROM_ENV:
     GOOGLE_CREDENTIALS_PATH = GOOGLE_CREDENTIALS_PATH_FROM_ENV
-    print(f"DEBUG: Using GOOGLE_APPLICATION_CREDENTIALS as is (absolute or from global env): {GOOGLE_CREDENTIALS_PATH}")
+    logger.debug(f"Using GOOGLE_APPLICATION_CREDENTIALS as is (absolute or from global env): {GOOGLE_CREDENTIALS_PATH}")
 else:
     GOOGLE_CREDENTIALS_PATH = None
-    print("DEBUG: GOOGLE_APPLICATION_CREDENTIALS not found in .env or environment.")
+    logger.warning("GOOGLE_APPLICATION_CREDENTIALS not found in .env or environment.")
 
 # Script configurations
 TARGET_SHEET_NAME = "Sheet1"  # The name of the sheet to update
@@ -280,9 +283,12 @@ def get_material_info(product_data_full_api_response, product_level_attributes_d
     return material, material_source
 
 def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_path, product_type, min_moq, max_moq, sheet_id_val, source_url):
-    print(f"--- Starting Google Sheet Update for Sheet ID: {spreadsheet_id} ---")
-    print(f"Product Type: {product_type}, Min MOQ: {min_moq}, Max MOQ: {max_moq}")
-    print(f"Source URL: {source_url}, Data Path: {product_data_path}")
+    """Process product data and upload to Google Sheets with detailed logging."""
+    logger.info(f"Starting processing for product data: {product_data_path}")
+    logger.debug(f"Parameters - sheet_name: {sheet_name}, product_type: {product_type}, min_moq: {min_moq}, max_moq: {max_moq}")
+    logger.info(f"--- Starting Google Sheet Update for Sheet ID: {spreadsheet_id} ---")
+    logger.info(f"Product Type: {product_type}, Min MOQ: {min_moq}, Max MOQ: {max_moq}")
+    logger.info(f"Source URL: {source_url}, Data Path: {product_data_path}")
 
     cleaned_source_url = clean_url(source_url) # Define cleaned_source_url
 
@@ -361,17 +367,17 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
 
         # If product_sku_infos is still empty after checking all locations, then print the warning and potentially return.
         if not product_sku_infos:
-            print("DEBUG: No SKUs found after checking all possible locations.")
-            print("❌ No product SKU information found in the JSON data.")
-            print("Attempted to find SKUs in these locations:")
-            print("1. result.result.productSkuInfos")
-            print("2. result.result.skuList")
-            print("3. result.result.productInfo.skuList")
-            print("4. result.result.productInfo.productSkuInfos")
-            print("5. result.skuList")
-            print("6. skuList")
-            print("\nAvailable data structure:")
-            print(json.dumps(data, indent=2, ensure_ascii=False)[:1000] + '...')
+            logger.debug("No SKUs found after checking all possible locations.")
+            logger.warning("No product SKU information found in the JSON data.")
+            logger.debug("Attempted to find SKUs in these locations:")
+            logger.debug("1. result.result.productSkuInfos")
+            logger.debug("2. result.result.skuList")
+            logger.debug("3. result.result.productInfo.skuList")
+            logger.debug("4. result.result.productInfo.productSkuInfos")
+            logger.debug("5. result.skuList")
+            logger.debug("6. skuList")
+            logger.debug("\nAvailable data structure:")
+            logger.debug(json.dumps(data, indent=2, ensure_ascii=False)[:1000] + '...')
             # Decide if we should return or proceed with product-level data if SKUs are truly absent.
             # For now, the logic below will handle creating a product-level entry if product_sku_infos remains empty.
 
@@ -380,7 +386,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         last_id_row = header_row_index 
         try:
             range_to_check = f'{sheet_name}!A{header_row_index + 1}:A'
-            print(f"Reading ID column from range: {range_to_check} to determine last_id_row.")
+            logger.debug(f"Reading ID column from range: {range_to_check} to determine last_id_row.")
             result = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_check).execute()
             id_column_values = result.get('values', [])
 
@@ -392,97 +398,71 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                         found_actual_last_id = True
                         break
                 if not found_actual_last_id:
-                    print(f"No valid IDs found in column A after header row {header_row_index}. last_id_row remains {last_id_row} (header row).")
+                    logger.debug(f"No valid IDs found in column A after header row {header_row_index}. last_id_row remains {last_id_row} (header row).")
             else:
-                print(f"ID column A from row {header_row_index + 1} onwards is empty. last_id_row remains {last_id_row} (header row).")
+                logger.debug(f"ID column A from row {header_row_index + 1} onwards is empty. last_id_row remains {last_id_row} (header row).")
             
-            print(f"Determined last_id_row (last row with data, or header row if empty): {last_id_row} (Sheet: '{sheet_name}')")
+            logger.info(f"Determined last_id_row (last row with data, or header row if empty): {last_id_row} (Sheet: '{sheet_name}')")
 
         except Exception as e:
-            print(f"Error reading ID column to determine last_id_row for sheet '{sheet_name}'. Defaulting to {last_id_row} (header row). Error: {e}")
-
-        # --- Determine last_id_row (last row with an ID, or header_row_index if no data) ---
-        header_row_index = 1 
-        last_id_row = header_row_index 
-        try:
-            range_to_check = f'{sheet_name}!A{header_row_index + 1}:A'
-            logging.debug(f"Reading ID column from range: {range_to_check} to determine last_id_row.")
-            result = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=range_to_check).execute()
-            id_column_values = result.get('values', [])
-
-            if id_column_values:
-                found_actual_last_id = False
-                for i in range(len(id_column_values) - 1, -1, -1):
-                    if id_column_values[i] and len(id_column_values[i]) > 0 and str(id_column_values[i][0]).strip():
-                        last_id_row = (header_row_index + 1) + i 
-                        found_actual_last_id = True
-                        break
-                if not found_actual_last_id:
-                    logging.debug(f"No valid IDs found in column A after header row {header_row_index}. last_id_row remains {last_id_row} (header row).")
-            else:
-                logging.debug(f"ID column A from row {header_row_index + 1} onwards is empty. last_id_row remains {last_id_row} (header row).")
-            
-            logging.info(f"Determined last_id_row (last row with data, or header row if empty): {last_id_row} (Sheet: '{sheet_name}')")
-
-        except Exception as e: 
-            logging.warning(f"Error reading ID column to determine last_id_row for sheet '{sheet_name}'. Defaulting to {last_id_row} (header row). Error: {e}")
+            logger.warning(f"Error reading ID column to determine last_id_row for sheet '{sheet_name}'. Defaulting to {last_id_row} (header row). Error: {e}")
 
         # --- Determine sku_id_counter based on the ID found in last_id_row ---
         sku_id_counter = 1 
         try:
             if last_id_row > header_row_index: 
                 last_id_value_range = f"{sheet_name}!A{last_id_row}"
-                logging.debug(f"Fetching last ID from cell: {last_id_value_range} to determine next sku_id_counter.")
+                logger.debug(f"Fetching last ID from cell: {last_id_value_range} to determine next sku_id_counter.")
                 last_id_cell_data = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=last_id_value_range).execute()
                 last_id_values = last_id_cell_data.get('values', [])
                 
                 if last_id_values and last_id_values[0] and str(last_id_values[0][0]).strip():
                     last_id_value = str(last_id_values[0][0]).strip()
-                    logging.debug(f"Found last_id_value: '{last_id_value}' at row {last_id_row}.")
+                    logger.debug(f"Found last_id_value: '{last_id_value}' at row {last_id_row}.")
                     last_id_parts = last_id_value.split('_')
                     if len(last_id_parts) > 1:
                         try:
                             current_max_sku_num = int(last_id_parts[-1])
                             sku_id_counter = current_max_sku_num + 1
-                            logging.info(f"Parsed SKU counter from '{last_id_value}', next counter will be {sku_id_counter}.")
+                            logger.info(f"Parsed SKU counter from '{last_id_value}', next counter will be {sku_id_counter}.")
                         except ValueError:
-                            logging.warning(f"Could not parse numeric counter from last part of ID '{last_id_value}'. Defaulting to 1.")
+                            logger.warning(f"Could not parse numeric counter from last part of ID '{last_id_value}'. Defaulting to 1.")
                             sku_id_counter = 1 
                     else:
-                        logging.warning(f"Last ID '{last_id_value}' does not match expected format for counter parsing. Defaulting SKU counter.")
+                        logger.warning(f"Last ID '{last_id_value}' does not match expected format for counter parsing. Defaulting SKU counter.")
                 else:
-                    logging.debug(f"Last ID cell A{last_id_row} is empty or not found. Defaulting SKU counter to 1.")
+                    logger.debug(f"Last ID cell A{last_id_row} is empty or not found. Defaulting SKU counter to 1.")
             else: 
-                logging.info(f"No existing data found (last_id_row {last_id_row} <= header_row_index {header_row_index}). Starting SKU counter from 1.")
+                logger.info(f"No existing data found (last_id_row {last_id_row} <= header_row_index {header_row_index}). Starting SKU counter from 1.")
                 sku_id_counter = 1
 
         except Exception as e: 
-            logging.warning(f"Error determining SKU counter from last ID: {e}. Defaulting sku_id_counter to 1.")
+            logger.warning(f"Error determining SKU counter from last ID: {e}. Defaulting sku_id_counter to 1.")
             sku_id_counter = 1
 
-        logging.info(f"Final sku_id_counter: {sku_id_counter}")
+        logger.info(f"Final sku_id_counter: {sku_id_counter}")
 
         product_id_template = f"{datetime.datetime.now().strftime('%Y%m%d')}_{product_type}_{{counter:03d}}"
-        logging.debug(f"product_id_template: '{product_id_template}', initial sku_id_counter: {sku_id_counter}")
+        logger.debug(f"product_id_template: '{product_id_template}', initial sku_id_counter: {sku_id_counter}")
 
         main_product_image = ""
         if product_data.get('result', {}).get('result', {}).get('productImage', {}).get('images') and \
            isinstance(product_data['result']['result']['productImage']['images'], list) and \
            len(product_data['result']['result']['productImage']['images']) > 0:
             main_product_image = product_data['result']['result']['productImage']['images'][0]
-        print(f"DEBUG: main_product_image: {main_product_image}")
+        logger.debug(f"main_product_image: {main_product_image}")
 
         product_attributes = {}
         if product_data.get('result', {}).get('result', {}).get('productAttribute'):
             for attr in product_data['result']['result']['productAttribute']:
                 if isinstance(attr, dict) and 'attributeId' in attr and 'valueTrans' in attr:
                     product_attributes[str(attr['attributeId'])] = str(attr['valueTrans'])
-        print(f"DEBUG: product_attributes: {product_attributes}")
+        logger.debug(f"product_attributes: {product_attributes}")
 
         # --- MOQ Filtering for priceRangeList to create price_tiers_to_process --- 
         price_tiers_to_process = []
         original_price_range_list = product_data.get('result', {}).get('result', {}).get('productSaleInfo', {}).get('priceRangeList', []) 
-        print(f"DEBUG: Original productSaleInfo.priceRangeList: {original_price_range_list}")
+        logger.debug(f"Original productSaleInfo.priceRangeList: {original_price_range_list}")
 
         temp_parsed_price_ranges = []
         for tier in original_price_range_list:
@@ -491,11 +471,11 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 tier_copy['startQuantity'] = int(tier_copy['startQuantity'])
                 temp_parsed_price_ranges.append(tier_copy)
             except (ValueError, TypeError, KeyError):
-                print(f"DEBUG: Skipping tier in priceRangeList due to invalid 'startQuantity': {tier}")
+                logger.debug(f"Skipping tier in priceRangeList due to invalid 'startQuantity': {tier}")
                 continue
         
         parsed_price_ranges = sorted(temp_parsed_price_ranges, key=lambda t: t.get('startQuantity', float('inf')))
-        print(f"DEBUG: Parsed and sorted price_ranges (from productSaleInfo): {parsed_price_ranges}")
+        logger.debug(f"Parsed and sorted price_ranges (from productSaleInfo): {parsed_price_ranges}")
 
         list_after_min_filter = []
         if min_moq is not None:
@@ -514,7 +494,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                         list_after_min_filter.append(tier_data_to_filter)
         else:
             list_after_min_filter = list(parsed_price_ranges)
-        print(f"DEBUG: Price tiers after min_moq ({min_moq}) filter: {list_after_min_filter}")
+        logger.debug(f"Price tiers after min_moq ({min_moq}) filter: {list_after_min_filter}")
 
         filtered_price_range_list_final = []
         if max_moq is not None:
@@ -523,7 +503,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                     filtered_price_range_list_final.append(tier)
         else:
             filtered_price_range_list_final = list(list_after_min_filter)
-        print(f"DEBUG: Price tiers after max_moq ({max_moq}) filter: {filtered_price_range_list_final}")
+        logger.debug(f"Price tiers after max_moq ({max_moq}) filter: {filtered_price_range_list_final}")
 
         if filtered_price_range_list_final:
             for tier in filtered_price_range_list_final:
@@ -536,34 +516,34 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
             product_direct_price = str(product_data.get('result', {}).get('result', {}).get('productSaleInfo', {}).get('price', ''))
             product_min_order_qty = str(product_data.get('result', {}).get('result', {}).get('minOrderQuantity', ''))
             if product_direct_price and product_min_order_qty:
-                print(f"DEBUG: No price tiers matched MOQ. Using product direct price {product_direct_price} and minOrderQuantity {product_min_order_qty} as a fallback tier.")
+                logger.debug(f"No price tiers matched MOQ. Using product direct price {product_direct_price} and minOrderQuantity {product_min_order_qty} as a fallback tier.")
                 price_tiers_to_process.append({'moq': product_min_order_qty, 'price1688': product_direct_price})
             else:
-                print("DEBUG: No price tiers matched MOQ, and no product direct price/minOrderQuantity for fallback. Adding default empty tier.")
+                logger.debug("No price tiers matched MOQ, and no product direct price/minOrderQuantity for fallback. Adding default empty tier.")
                 price_tiers_to_process.append({'moq': '', 'price1688': ''})
-        print(f"DEBUG: Final price_tiers_to_process after MOQ filtering and fallbacks: {price_tiers_to_process}")
+        logger.debug(f"Final price_tiers_to_process after MOQ filtering and fallbacks: {price_tiers_to_process}")
 
         # --- Populate sku_data --- 
-        print(f"DEBUG: Before 'if not product_sku_infos' check. product_sku_infos is: {product_sku_infos} (len: {len(product_sku_infos) if product_sku_infos else 0})")
+        logger.debug(f"Before 'if not product_sku_infos' check. product_sku_infos is: {product_sku_infos} (len: {len(product_sku_infos) if product_sku_infos else 0})")
 
         sku_data_final_rows = []
 
         if not product_sku_infos: # Case: No SKUs found, use product-level data
-            print("DEBUG: Entered 'if not product_sku_infos' block (product-level data path).")
+            logger.debug("Entered 'if not product_sku_infos' block (product-level data path).")
             
             # Define product_default_moq for the no-SKU path
             product_min_order_qty_str = data.get('result', {}).get('result', {}).get('minOrderQuantity', "1")
             try:
                 product_default_moq = int(product_min_order_qty_str)
             except ValueError:
-                print(f"DEBUG: Warning: Could not parse product minOrderQuantity '{product_min_order_qty_str}' for no-SKU path. Defaulting to 1.")
+                logger.warning(f"Could not parse product minOrderQuantity '{product_min_order_qty_str}' for no-SKU path. Defaulting to 1.")
                 product_default_moq = 1
 
             # Define main_product_image_formula here for the no-SKU path, before the loop
             main_product_image_formula = f'=HYPERLINK("{main_product_image}", IMAGE("{main_product_image}"))' if main_product_image else ""
 
             if not price_tiers_to_process: 
-                print("DEBUG: No SKUs and no product-level price tiers. Cannot determine data to upload.")
+                logger.error(f"No data found in {product_data_path} or file is empty. Cannot determine data to upload.")
             else:
                 for tier_index, tier in enumerate(price_tiers_to_process):
                     sku_id_counter += 1 # Increment for each product-level tier row
@@ -1018,10 +998,10 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
             print("Could not determine updated range to set row heights.")
 
     except HttpError as error:
-        print(f"An API error occurred during data upload: {error}")
+        logger.error(f"An API error occurred during data upload: {error}")
         raise
     except Exception as e:
-        print(f"An unexpected error occurred during data processing: {e}")
+        logger.error(f"An unexpected error occurred during data processing: {e}", exc_info=True)
         raise
 
     return {
@@ -1037,22 +1017,22 @@ def run_sheet_update(product_data_path, product_type_arg, min_moq_arg, max_moq_a
     
     if not google_sheet_id_param:
         error_msg = "Google Sheet ID is required but was not provided to run_sheet_update."
-        print(f"ERROR: {error_msg}")
+        logger.error(f"Error processing data: {str(error_msg)}")
         raise ValueError(error_msg)
 
-    print(f"--- Starting Google Sheet Update for Sheet ID: {google_sheet_id_param} ---")
-    print(f"Product Type: {product_type_arg}, Min MOQ: {min_moq_arg}, Max MOQ: {max_moq_arg}")
-    print(f"Source URL: {source_url_arg}, Data Path: {product_data_path}")
+    logger.info(f"--- Starting Google Sheet Update for Sheet ID: {google_sheet_id_param} ---")
+    logger.info(f"Product Type: {product_type_arg}, Min MOQ: {min_moq_arg}, Max MOQ: {max_moq_arg}")
+    logger.info(f"Source URL: {source_url_arg}, Data Path: {product_data_path}")
 
     try:
         service = get_google_sheets_service()
-        print("Google Sheets service initialized successfully.")
+        logger.info("Google Sheets service initialized successfully.")
 
         sheet_id_val = get_sheet_id_by_name(service, google_sheet_id_param, TARGET_SHEET_NAME)
 
         if sheet_id_val is None:
             if TARGET_SHEET_NAME:
-                print(f"Sheet named '{TARGET_SHEET_NAME}' not found in spreadsheet '{google_sheet_id_param}'. Attempting to create it.")
+                logger.info(f"Sheet named '{TARGET_SHEET_NAME}' not found in spreadsheet '{google_sheet_id_param}'. Attempting to create it.")
                 try:
                     add_sheet_request_body = {
                         'requests': [{
@@ -1063,78 +1043,82 @@ def run_sheet_update(product_data_path, product_type_arg, min_moq_arg, max_moq_a
                             }
                         }]
                     }
-                    response = service.spreadsheets().batchUpdate(spreadsheetId=google_sheet_id_param, body=add_sheet_request_body).execute()
+                    response = service.spreadsheets().batchUpdate(
+                        spreadsheetId=google_sheet_id_param, 
+                        body=add_sheet_request_body
+                    ).execute()
                     new_sheet_properties = response.get('replies')[0].get('addSheet').get('properties')
                     sheet_id_val = new_sheet_properties.get('sheetId')
-                    print(f"Successfully created sheet '{TARGET_SHEET_NAME}' with ID: {sheet_id_val}")
+                    logger.info(f"Successfully created sheet '{TARGET_SHEET_NAME}' with ID: {sheet_id_val}")
                 except HttpError as error_create:
                     err_msg = f"Failed to create sheet '{TARGET_SHEET_NAME}' in spreadsheet '{google_sheet_id_param}': {error_create}"
-                    print(f"ERROR: {err_msg}")
+                    logger.error(err_msg)
                     raise ValueError(err_msg)
             else:
-                 err_msg = f"Target sheet name ('{TARGET_SHEET_NAME}') not found in spreadsheet '{google_sheet_id_param}' and no sheet name configured to create."
-                 print(f"ERROR: {err_msg}")
-                 raise ValueError(err_msg)
+                err_msg = f"Target sheet name ('{TARGET_SHEET_NAME}') not found in spreadsheet '{google_sheet_id_param}' and no sheet name configured to create."
+                logger.error(err_msg)
+                raise ValueError(err_msg)
 
         ensure_header_and_freeze(service, google_sheet_id_param, sheet_id_val, TARGET_SHEET_NAME, EXPECTED_HEADER)
-        print(f"Header check/update for sheet '{TARGET_SHEET_NAME}' (ID: {sheet_id_val}) complete.")
+        logger.info(f"Header check/update for sheet '{TARGET_SHEET_NAME}' (ID: {sheet_id_val}) complete.")
 
         # Get statistics from the data processing
-        stats = process_and_upload_data(service, google_sheet_id_param, TARGET_SHEET_NAME, product_data_path, product_type_arg, min_moq_arg, max_moq_arg, sheet_id_val, source_url_arg)
-        print(f"Data processing and upload for sheet '{TARGET_SHEET_NAME}' complete.")
-        print(f"--- Google Sheet Update for Sheet ID: {google_sheet_id_param} Finished Successfully ---")
+        stats = process_and_upload_data(
+            service, 
+            google_sheet_id_param, 
+            TARGET_SHEET_NAME, 
+            product_data_path, 
+            product_type_arg, 
+            min_moq_arg, 
+            max_moq_arg, 
+            sheet_id_val, 
+            source_url_arg
+        )
+        logger.info(f"Data processing and upload for sheet '{TARGET_SHEET_NAME}' complete.")
+        logger.info(f"--- Google Sheet Update for Sheet ID: {google_sheet_id_param} Finished Successfully ---")
         
         return stats  # Return the statistics
 
     except FileNotFoundError as e_fnf:
-        print(f"ERROR during sheet update (FileNotFound) for '{google_sheet_id_param}': {e_fnf}")
+        logger.error(f"File not found during sheet update for '{google_sheet_id_param}': {e_fnf}")
         raise
     except ValueError as e_val:
-        print(f"ERROR during sheet update (ValueError) for '{google_sheet_id_param}': {e_val}")
+        logger.error(f"Value error during sheet update for '{google_sheet_id_param}': {e_val}")
         raise
     except HttpError as e_http:
-        print(f"API ERROR during sheet update for '{google_sheet_id_param}': {e_http}")
-        print(f"Details: {e_http.content}")
+        logger.error(f"API error during sheet update for '{google_sheet_id_param}': {e_http}")
+        logger.error(f"Details: {e_http.content}")
         raise
     except Exception as e_general:
-        print(f"UNEXPECTED ERROR during sheet update for '{google_sheet_id_param}': {e_general}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Unexpected error during sheet update for '{google_sheet_id_param}': {e_general}", exc_info=True)
         raise
 
 if __name__ == '__main__':
     # This part is now more for structure; direct execution might require specific args.
     # For full functionality, use main.py which will handle argument parsing.
-    print("update_google_sheet.py executed directly.")
-    print("This script is primarily designed to be called by main.py with arguments.")
-    print("Attempting run with placeholder/default values (may not work as intended without main.py):")
+    logger.info("update_google_sheet.py executed directly.")
+    logger.info("This script is primarily designed to be called by main.py with arguments.")
+    logger.info("Attempting run with placeholder/default values (may not work as intended without main.py):")
     
     # Example placeholder values - these would normally come from main.py via argparse
-    example_product_data_path = "product_data.json" # Default path if run standalone
+    example_product_data_path = "product_data.json"  # Default path if run standalone
     example_product_type = "testprod" 
     example_min_moq = None
     example_max_moq = None
-    example_source_url = "https://example.com/default_product.html" # Placeholder source URL
-    example_google_sheet_id = "your_spreadsheet_id_here" # Placeholder Google Sheet ID
+    example_source_url = "https://example.com/default_product.html"  # Placeholder source URL
+    example_google_sheet_id = "your_spreadsheet_id_here"  # Placeholder Google Sheet ID
 
     # Check if a default product_data.json exists, otherwise skip process_and_upload
     if os.path.exists(example_product_data_path):
-        run_sheet_update(example_product_data_path, example_product_type, example_min_moq, example_max_moq, example_source_url, example_google_sheet_id)
+        run_sheet_update(
+            example_product_data_path, 
+            example_product_type, 
+            example_min_moq, 
+            example_max_moq, 
+            example_source_url, 
+            example_google_sheet_id
+        )
     else:
-        print(f"Placeholder product_data.json ('{example_product_data_path}') not found.")
-        print("To test sheet header creation (if sheet service works), you might need to run parts manually or ensure a dummy file.")
-        # Optionally, could call just the header part if GOOGLE_SHEET_ID is set:
-        # if GOOGLE_SHEET_ID:
-        #     try:
-        #         service = get_google_sheets_service()
-        #         target_sheet_id_val = get_sheet(service, GOOGLE_SHEET_ID, TARGET_SHEET_NAME)
-        #         if target_sheet_id_val is not None:
-        #             ensure_header_and_freeze(service, GOOGLE_SHEET_ID, TARGET_SHEET_NAME, target_sheet_id_val)
-        #         else:
-        #             print(f"Sheet '{TARGET_SHEET_NAME}' not found for header test.")
-        #     except Exception as e:
-        #         print(f"Error during standalone header test: {e}")
-        # else:
-        #     print("GOOGLE_SHEET_ID not set, cannot test header creation.")
-
-    print("Finished direct execution attempt of update_google_sheet.py.")
+        logger.warning(f"Placeholder product_data.json ('{example_product_data_path}') not found.")
+        logger.info("To test sheet header creation (if sheet service works), you might need to run parts manually or ensure a dummy file.")
+        logger.info("Finished direct execution attempt of update_google_sheet.py.")
