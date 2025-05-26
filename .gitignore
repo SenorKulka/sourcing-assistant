@@ -15,4 +15,7 @@ wheels/
 # Google Cloud service account key file
 gen-lang*.json
 
+# logs
+logs
+
 
