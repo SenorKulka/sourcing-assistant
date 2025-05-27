@@ -364,7 +364,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 print(f"🔍 Found {len(sku_list)} SKUs in API response")
                 break
         
-        print(f"DEBUG: product_sku_infos after find_sku_data: {product_sku_infos} (type: {type(product_sku_infos)}, len: {len(product_sku_infos) if isinstance(product_sku_infos, list) else 'N/A'})")
+        print(f"DEBUG: product_sku_infos after find_sku_data: {product_sku_infos} (type: {type(product_sku_infos)}, len: {len(product_sku_infos) if product_sku_infos else 0})")
 
         # If product_sku_infos is still empty after checking all locations, then print the warning and potentially return.
         if not product_sku_infos:
@@ -437,7 +437,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 logger.info(f"No existing data found (last_id_row {last_id_row} <= header_row_index {header_row_index}). Starting SKU counter from 1.")
                 sku_id_counter = 1
 
-        except Exception as e: 
+        except Exception as e:
             logger.warning(f"Error determining SKU counter from last ID: {e}. Defaulting sku_id_counter to 1.")
             sku_id_counter = 1
 
@@ -546,8 +546,11 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
             if not price_tiers_to_process: 
                 logger.error(f"No data found in {product_data_path} or file is empty. Cannot determine data to upload.")
             else:
+                logger.debug(f"DEBUG: About to process {len(price_tiers_to_process)} price tiers. Current sku_id_counter: {sku_id_counter}")
                 for tier_index, tier in enumerate(price_tiers_to_process):
+                    logger.debug(f"DEBUG: Processing tier {tier_index}, sku_id_counter before ID generation: {sku_id_counter}")
                     product_id_val = product_id_template.format(counter=sku_id_counter)
+                    logger.debug(f"DEBUG: Generated product_id_val: {product_id_val}")
                     sku_id_counter += 1
                     
                     product_info_str = data.get('result', {}).get('result', {}).get('subjectTrans', data.get('result', {}).get('result', {}).get('subject', 'N/A'))
@@ -576,7 +579,9 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 product_default_moq = 1
 
             for sku_index, sku in enumerate(product_sku_infos):
+                logger.debug(f"DEBUG: Processing SKU {sku_index}, sku_id_counter before ID generation: {sku_id_counter}")
                 sku_id_val = product_id_template.format(counter=sku_id_counter)
+                logger.debug(f"DEBUG: Generated sku_id_val: {sku_id_val}")
                 sku_id_counter += 1
 
                 sku_attributes_list = sku.get('skuAttributes', [])
@@ -612,6 +617,42 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 sku_data_final_rows.append(row_data)
             
             print(f"DEBUG: sku_data after processing all SKUs: {sku_data_final_rows}")
+
+            # Fallback for SKUs with no individual price: repeat SKUs for each product-level price tier
+            if not sku_data_final_rows and price_tiers_to_process:
+                logger.debug("DEBUG: No SKU-level price data found. Falling back to repeating SKUs for each product-level price tier.")
+                fallback_rows = []
+                for tier in price_tiers_to_process:
+                    for sku in product_sku_infos:
+                        logger.debug(f"DEBUG: Fallback processing tier {tier} and SKU {sku.get('skuId')} at counter {sku_id_counter}")
+                        sku_id_val = product_id_template.format(counter=sku_id_counter)
+                        sku_id_counter += 1
+                        # build sku_info_str and image formula
+                        sku_attributes_list = sku.get('skuAttributes', [])
+                        sku_info_parts = []
+                        sku_image_url_for_sku = main_product_image
+                        for attr in sku_attributes_list:
+                            attr_name = attr.get('attributeNameTrans', attr.get('attributeName', 'N/A'))
+                            attr_value = attr.get('valueTrans', attr.get('value', 'N/A'))
+                            sku_info_parts.append(f"{attr_name}: {attr_value}")
+                            if attr.get('skuImageUrl'):
+                                sku_image_url_for_sku = attr.get('skuImageUrl')
+                        sku_info_str = ", ".join(sku_info_parts) if sku_info_parts else "N/A"
+                        image_formula = f'=HYPERLINK("{sku_image_url_for_sku}", IMAGE("{sku_image_url_for_sku}"))' if sku_image_url_for_sku else ""
+                        # use tier price and moq
+                        material, _ = get_material_info(data, product_attributes, sku_attributes_list)
+                        row_data = {
+                            'id': sku_id_val,
+                            'image': image_formula,
+                            'price1688': tier.get('price1688', 'N/A'),
+                            'moq': str(tier.get('moq', product_default_moq)),
+                            'info': sku_info_str,
+                            'material': material,
+                            'link': cleaned_source_url
+                        }
+                        fallback_rows.append(row_data)
+                sku_data_final_rows = fallback_rows
+                print(f"DEBUG: sku_data after fallback processing: {sku_data_final_rows}")
 
         # Filter the collected sku_data_final_rows by MOQ (user-defined filters)
         if min_moq is not None or max_moq is not None:
