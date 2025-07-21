@@ -154,7 +154,7 @@
                     currentIndex++;
                     const progress = `[${currentIndex}/${totalLinks}]`;
                     
-                    statusMessagesDiv.innerHTML = `<p style="color: blue;">${progress} 🔄 Processing ${link}...</p>`;
+                    statusMessagesDiv.innerHTML = `<p style="color: blue;">🔄 ${progress} Processing ${link}...</p>`;
                     console.log(`${progress} Sending request for: ${link}, Product: ${productName}, MinMOQ: ${minMoq}, MaxMOQ: ${maxMoq}`);
 
                     try {
@@ -193,7 +193,19 @@
                                         displayMessage = message.replace(productNameRegex, `'<a href="${urlResult.source_url}" target="_blank" class="product-link">$1</a>'`);
                                     }
                                     
-                                    resultsHTML += `<p style="color: ${textColor}; margin: 10px 0; padding: 8px; background-color: ${bgColor}; border-left: 4px solid ${borderColor};">${progress} ${displayMessage}</p>`;
+                                    // Move progress counter after the emoji if present
+                                    let finalMessage = displayMessage;
+                                    // Find the first emoji in the message (starts with a non-whitespace character)
+                                    const emojiMatch = displayMessage.match(/^([^\s\w]\s*)(.*)/);
+                                    if (emojiMatch) {
+                                        // If there's an emoji at the start, insert progress counter after it
+                                        const [_, emoji, restOfMessage] = emojiMatch;
+                                        finalMessage = `${emoji}${progress} ${restOfMessage}`;
+                                    } else {
+                                        // If no emoji found, just prepend the progress counter
+                                        finalMessage = `${progress} ${displayMessage}`;
+                                    }
+                                    resultsHTML += `<p style="color: ${textColor}; margin: 10px 0; padding: 8px; background-color: ${bgColor}; border-left: 4px solid ${borderColor};">${finalMessage}</p>`;
                                 } else {
                                     resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">${progress} ❌ Error processing ${link}: ${urlResult.message || 'Unknown error'}</p>`;
                                     allSuccessful = false;
