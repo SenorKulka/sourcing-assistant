@@ -299,7 +299,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         # Extract product name early for logging
         product_name = data.get('result', {}).get('result', {}).get('subjectTrans', 
                       data.get('result', {}).get('result', {}).get('subject', 'Unknown Product'))
-        product_name_short = product_name[:40] + "..." if len(product_name) > 40 else product_name
+        product_name_short = product_name[:60] + "..." if len(product_name) > 60 else product_name
         
         print(f"📦 Processing product: {product_name_short}")
 
@@ -627,6 +627,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 "skus_found": len(product_sku_infos) if product_sku_infos else 0,
                 "skus_after_filter": 0,
                 "price_tiers_count": len(price_tiers_to_process) if 'price_tiers_to_process' in locals() else 0,
+                "moq_groups_count": 0,
                 "error": "No SKUs found after filtering by MOQ or no initial product/SKU data."
             }
 
@@ -1013,6 +1014,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         "skus_found": len(product_sku_infos) if product_sku_infos else 0,
         "skus_after_filter": len(sku_data_final_rows),
         "price_tiers_count": len(price_tiers_to_process) if 'price_tiers_to_process' in locals() else 0,
+        "moq_groups_count": len(price_moq_groups),
         "price_moq_groups": price_moq_groups
     }
 

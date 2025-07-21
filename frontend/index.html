@@ -71,6 +71,13 @@
             text-align: center;
             margin-top: 30px;
         }
+        .product-link {
+            text-decoration: none;
+            color: inherit;
+        }
+        .product-link:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
@@ -137,15 +144,18 @@
                     return;
                 }
 
-                const productLinks = productLinksText.trim().split('\n');
+                const productLinks = productLinksText.trim().split('\n').filter(link => link.trim());
                 let resultsHTML = '';
                 let allSuccessful = true;
+                const totalLinks = productLinks.length;
+                let currentIndex = 0;
 
                 for (const link of productLinks) {
-                    if (!link.trim()) continue; // Skip empty lines
-
-                    statusMessagesDiv.innerHTML = `<p style="color: blue;">🔄 Processing ${link}...</p>`;
-                    console.log(`Sending request for: ${link}, Product: ${productName}, MinMOQ: ${minMoq}, MaxMOQ: ${maxMoq}`);
+                    currentIndex++;
+                    const progress = `[${currentIndex}/${totalLinks}]`;
+                    
+                    statusMessagesDiv.innerHTML = `<p style="color: blue;">${progress} 🔄 Processing ${link}...</p>`;
+                    console.log(`${progress} Sending request for: ${link}, Product: ${productName}, MinMOQ: ${minMoq}, MaxMOQ: ${maxMoq}`);
 
                     try {
                         const response = await fetch('/api/process', {
@@ -169,34 +179,41 @@
                             if (result.results && result.results.length > 0) {
                                 const urlResult = result.results[0]; // Get the first (and only) result
                                 if (urlResult.status === "success") {
-                                    // Check if this is a warning message (starts with ⚠️ Processing completed with issues)
+                                    // Check if this is a warning message (starts with ⚠️)
                                     const message = urlResult.message || 'Done.';
-                                    const isWarning = message.startsWith("⚠️ Processing completed with issues");
+                                    const isWarning = message.startsWith("⚠️");
                                     const bgColor = isWarning ? "#fff8e1" : "#f0f8f0";
                                     const borderColor = isWarning ? "orange" : "green";
                                     const textColor = isWarning ? "orange" : "green";
                                     
-                                    resultsHTML += `<p style="color: ${textColor}; margin: 10px 0; padding: 8px; background-color: ${bgColor}; border-left: 4px solid ${borderColor};">${message}</p>`;
+                                    // Make product name clickable if available
+                                    let displayMessage = message;
+                                    if (urlResult.product_name && urlResult.source_url) {
+                                        const productNameRegex = /'([^']+)'/;
+                                        displayMessage = message.replace(productNameRegex, `'<a href="${urlResult.source_url}" target="_blank" class="product-link">$1</a>'`);
+                                    }
+                                    
+                                    resultsHTML += `<p style="color: ${textColor}; margin: 10px 0; padding: 8px; background-color: ${bgColor}; border-left: 4px solid ${borderColor};">${progress} ${displayMessage}</p>`;
                                 } else {
-                                    resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${urlResult.message || 'Unknown error'}</p>`;
+                                    resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">${progress} ❌ Error processing ${link}: ${urlResult.message || 'Unknown error'}</p>`;
                                     allSuccessful = false;
                                 }
                             } else {
                                 // Fallback to old structure
-                                resultsHTML += `<p style="color: green; margin: 10px 0; padding: 8px; background-color: #f0f8f0; border-left: 4px solid green;">${result.message || 'Done.'}</p>`;
+                                resultsHTML += `<p style="color: green; margin: 10px 0; padding: 8px; background-color: #f0f8f0; border-left: 4px solid green;">${progress} ${result.message || 'Done.'}</p>`;
                             }
                         } else {
                             // Handle error responses
                             if (result.results && result.results.length > 0) {
                                 const urlResult = result.results[0];
-                                resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${urlResult.message || 'Unknown error'}</p>`;
+                                resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">${progress} ❌ Error processing ${link}: ${urlResult.message || 'Unknown error'}</p>`;
                             } else {
-                                resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Error processing ${link}: ${result.error || 'Unknown error'}</p>`;
+                                resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">${progress} ❌ Error processing ${link}: ${result.error || 'Unknown error'}</p>`;
                             }
                             allSuccessful = false;
                         }
                     } catch (error) {
-                        resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">❌ Network error processing ${link}: ${error.message || 'Unknown error'}</p>`;
+                        resultsHTML += `<p style="color: red; margin: 10px 0; padding: 8px; background-color: #fff0f0; border-left: 4px solid red;">${progress} ❌ Network error processing ${link}: ${error.message || 'Unknown error'}</p>`;
                         allSuccessful = false;
                         console.error('Fetch error:', error);
                     }

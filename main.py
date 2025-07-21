@@ -109,21 +109,24 @@ def process_sourcing_request(url, product_name, min_moq, max_moq, google_sheet_i
                     skus_after_filter = stats['skus_after_filter']
                     rows_uploaded = stats['rows_uploaded']
                     price_tiers = stats.get('price_tiers_count', 0)
+                    moq_groups = stats.get('moq_groups_count', 0)
                     
                     if skus_found > 0:
                         # SKU-based product
-                        message = f"✅ Successfully processed '{stats['product_name']}' - {skus_found} SKUs found → {skus_after_filter} after filtering → {rows_uploaded} uploaded to Google Sheet"
+                        message = f"✅ '{stats['product_name']}' - {skus_found} SKUs found → {skus_after_filter} after filtering → {rows_uploaded} uploaded ({moq_groups} MOQ groups)"
                     else:
                         # Price-tier-based product (no individual SKUs)
                         if price_tiers > 0:
-                            message = f"✅ Successfully processed '{stats['product_name']}' - {price_tiers} price variations found → {rows_uploaded} uploaded to Google Sheet"
+                            message = f"✅ '{stats['product_name']}' - {price_tiers} price variations found → {rows_uploaded} uploaded ({moq_groups} MOQ groups)"
                         else:
-                            message = f"✅ Successfully processed '{stats['product_name']}' - {rows_uploaded} variants uploaded to Google Sheet"
+                            message = f"✅ '{stats['product_name']}' - {rows_uploaded} variants uploaded ({moq_groups} MOQ groups)"
                 else:
-                    message = f"⚠️ Processing completed with issues for '{stats.get('product_name', 'Unknown Product')}': {stats.get('error', 'Unknown error')}"
+                    message = f"⚠️ '{stats.get('product_name', 'Unknown Product')}': {stats.get('error', 'Unknown error')}"
                 
                 response_data = {
                     "message": message,
+                    "product_name": stats.get('product_name', 'Unknown Product'),
+                    "source_url": url,
                     "rows_uploaded": stats.get('rows_uploaded', 0),
                     "skus_found": stats.get('skus_found', 0),
                     "skus_after_filter": stats.get('skus_after_filter', 0),
@@ -223,9 +226,12 @@ def handle_api_process():
             "url": url,
             "status": "success" if status == 200 else "error",
             "message": response.get("message") or response.get("error"),
+            "product_name": response.get("product_name", "Unknown Product"),
+            "source_url": response.get("source_url", url),
             "rows_uploaded": stats.get("rows_uploaded", 0),
             "skus_found": stats.get("skus_found", 0),
             "price_tiers_count": stats.get("price_tiers_count", 0),
+            "moq_groups_count": stats.get("moq_groups_count", 0),
             "status_code": status
         })
     
