@@ -12,6 +12,10 @@ This script automates fetching product information from 1688.com product URLs vi
 * Calculates a placeholder profit column in the sheet.
 * Allows filtering of price tiers based on minimum (minmoq) and maximum (maxmoq) order quantities.
 * **Enhanced User Feedback**: Provides detailed processing statistics including product names, SKU counts found, filtered, and uploaded to help track sourcing progress.
+* **Progress Tracking**: Shows real-time progress counters ([1/3], [2/3], etc.) during multi-product processing.
+* **Clickable Product Links**: Product names in results are clickable links that open the source URL in a new tab.
+* **Smart MOQ Filtering**: Automatically handles products with low individual MOQs (< 100) that have product-level pricing tiers.
+* **Multiple Price Field Support**: Extracts prices from various API response fields (consignPrice, fenxiaoPriceInfo.offerPrice, price).
 
 ## How It Works
 
@@ -55,7 +59,7 @@ For each SKU, the script processes these attributes in order:
 
 1. **SKU ID**: Auto-generated with format `YYYYMMDD_PRODUCTNAME_###`
 2. **Image**: As per image handling above
-3. **Price**: SKU price → Product price → Empty if none
+3. **Price**: SKU consignPrice → SKU fenxiaoPriceInfo.offerPrice → SKU price → Product price → Empty if none
 4. **Info Text**: SKU attribute 3216 → Product attribute 3216 → Empty
 5. **Material**: SKU attribute 287 → Product attribute 287 → Empty
 6. **Link**: Cleaned source URL (without query parameters)
@@ -71,13 +75,21 @@ For each SKU, the script processes these attributes in order:
 
 The application provides clear, real-time feedback during processing:
 
-* **Processing Status**: Shows which product link is currently being processed
-* **Detailed Results**: Displays product names (truncated for readability) and processing statistics
+* **Processing Status**: Shows which product link is currently being processed with progress counters (🔄 [1/3] Processing...)
+* **Detailed Results**: Displays product names (up to 60 characters) and processing statistics
 * **Success Messages**: Shows exactly how many SKUs were found, filtered by MOQ criteria, and uploaded
+* **Clickable Product Names**: Product names in results are clickable links to the original 1688 page
 * **Error Handling**: Clear error messages with specific details when issues occur
 * **Visual Indicators**: Color-coded messages with emoji indicators for easy status recognition
+  * Green background: Successful uploads
+  * Orange background: Warnings (e.g., no data after filtering)
+  * Red background: Errors
+* **MOQ Group Information**: Shows how many different price/quantity tiers were processed
 
-Example success message: *"✅ Successfully processed 'Wireless Bluetooth Headphones Pro...' - 15 SKUs found → 8 after filtering → 8 uploaded to Google Sheet"*
+Example success messages:
+
+* *"✅ [1/3] 'Wireless Bluetooth Headphones Pro Max Ultra...' - 15 SKUs found → 8 after filtering → 8 uploaded (3 MOQ groups)"*
+* *"✅ [2/3] 'Silicone Luggage Tags Independence Day...' - 3 price variations found → 3 uploaded (3 MOQ groups)"*
 
 ## Prerequisites
 
@@ -180,11 +192,11 @@ Once everything is set up, you can run the application. Ensure your virtual envi
 
 3. **Fill in the Form:**
     You will see a form with the following fields:
-    * **Product Link:** (Required) The full URL of the 1688.com product page.
-    * **Product Name:** (Optional) A name for the product, used in generating SKU IDs.
-    * **Min MOQ:** (Optional) Minimum order quantity. Price tiers below this will be excluded. If left empty, defaults to `120`.
-    * **Max MOQ:** (Optional) Maximum order quantity. Price tiers above this will be excluded.
-    * **Google Sheet Link/ID:** (Required) The full URL of your Google Sheet (e.g., `https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit`) or just the Google Sheet ID itself.
+    * **Google Sheet Link:** (Required) The full URL of your Google Sheet (e.g., `https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit`) or just the Google Sheet ID itself. Make sure the service account email has access to the sheet.
+    * **Product Listing Links:** (Required) One or more 1688.com product URLs, one per line. You can process multiple products in a single request.
+    * **Product Name:** (Optional) A name for the product, used in generating SKU IDs (e.g., "zoki", "widgets").
+    * **Minimum MOQ:** (Optional) Minimum order quantity. Price tiers below this will be excluded. If left empty, defaults to `120`.
+    * **Maximum MOQ:** (Optional) Maximum order quantity. Price tiers above this will be excluded.
 
 4. **Submit:**
     Click the "Submit" button. The backend will process the request, fetch data from LovBuy, and update your Google Sheet.
@@ -223,6 +235,8 @@ uv run python main.py https://detail.1688.com/offer/yyyyyyyyyyyy.html --product 
 
 ## Troubleshooting
 
+### Common Setup Issues
+
 * **`LOVBUY_API_KEY not found` / `GOOGLE_SHEET_ID not found` / `GOOGLE_APPLICATION_CREDENTIALS not found`:** Ensure your `.env` file is correctly named, located in the project root, and contains the correct keys and values.
 * **`FileNotFoundError: [Errno 2] No such file or directory: 'your-service-account-key.json'`:** Double-check the path specified in `GOOGLE_APPLICATION_CREDENTIALS` in your `.env` file. Ensure it correctly points to your downloaded JSON key file. The path can be absolute or relative to the project root.
 * **Google Sheets API Errors (HttpError 403, etc.):**
@@ -230,6 +244,15 @@ uv run python main.py https://detail.1688.com/offer/yyyyyyyyyyyy.html --product 
   * Verify the service account has permissions to edit the target Google Sheet. You might need to share the Google Sheet with the service account's email address (found in its details in the Google Cloud Console) giving it "Editor" access.
 * **`uv: command not found`:** Ensure `uv` was installed correctly and its installation directory is in your system's PATH.
 * **Dependency Issues:** If `uv sync` or `uv pip install` fails, check your internet connection and ensure `pyproject.toml` (or `requirements.txt`) is correctly formatted.
+
+### Processing Issues
+
+* **"No SKUs found after filtering by MOQ":** This can happen for several reasons:
+  * **Low MOQ Products**: Products with very low individual MOQs (< 100) should automatically pass through filtering. If they don't, check the logs for price extraction issues.
+  * **Price Field Issues**: The system checks multiple price fields (consignPrice, fenxiaoPriceInfo.offerPrice, price). If none are found, SKUs will be skipped.
+  * **MOQ Settings**: Check if your minimum MOQ setting is too high for the product. The default is 120.
+* **"Balance is not enough" or other API errors:** These are LovBuy API-specific errors. Check your LovBuy account balance and API key validity.
+* **Products showing as warnings instead of success:** Orange warning messages indicate the product was processed but no data was uploaded (e.g., all SKUs filtered out by MOQ criteria).
 
 ## License
 
