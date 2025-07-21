@@ -230,13 +230,13 @@ def filter_skus_by_moq(sku_data_list, min_moq_filter, max_moq_filter, product_le
         # For SKU products, if the product-level price tier MOQ meets the filter, include all SKUs
         # This is because SKUs inherit the product-level pricing structure
         if min_moq_filter is not None:
-            # Check if any of the product's price tiers meet the min MOQ requirement
-            meets_min_moq = current_item_moq >= min_moq_filter
-            if not meets_min_moq:
-                # Check if this is a low individual SKU MOQ but product has higher tier pricing
-                if current_item_moq < 100:  # Likely individual SKU MOQ, check product pricing
-                    print(f"DEBUG: filter_skus_by_moq: SKU has low MOQ ({current_item_moq}), checking product-level pricing compatibility")
-                    meets_min_moq = True  # Allow SKUs through if they're part of a product with price tiers
+            # Check if this is a low individual SKU MOQ but product has higher tier pricing
+            if current_item_moq < 100:  # Likely individual SKU MOQ, check product pricing
+                print(f"DEBUG: filter_skus_by_moq: SKU has low MOQ ({current_item_moq}), allowing through due to product-level pricing")
+                meets_min_moq = True  # Allow SKUs through if they're part of a product with price tiers
+            else:
+                # Check if any of the product's price tiers meet the min MOQ requirement
+                meets_min_moq = current_item_moq >= min_moq_filter
                 
             if not meets_min_moq:
                 print(f"DEBUG: filter_skus_by_moq: SKU ID {sku_item.get('id', 'N/A')} (MOQ {current_item_moq}) failed min_moq_filter ({min_moq_filter}). Skipping.")
