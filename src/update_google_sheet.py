@@ -408,43 +408,10 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
         except Exception as e:
             logger.warning(f"Error reading ID column to determine last_id_row for sheet '{sheet_name}'. Defaulting to {last_id_row} (header row). Error: {e}")
 
-        # --- Determine sku_id_counter based on the ID found in last_id_row ---
-        sku_id_counter = 1 
-        try:
-            if last_id_row > header_row_index: 
-                last_id_value_range = f"{sheet_name}!A{last_id_row}"
-                logger.debug(f"Fetching last ID from cell: {last_id_value_range} to determine next sku_id_counter.")
-                last_id_cell_data = service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=last_id_value_range).execute()
-                last_id_values = last_id_cell_data.get('values', [])
-                
-                if last_id_values and last_id_values[0] and str(last_id_values[0][0]).strip():
-                    last_id_value = str(last_id_values[0][0]).strip()
-                    logger.debug(f"Found last_id_value: '{last_id_value}' at row {last_id_row}.")
-                    last_id_parts = last_id_value.split('_')
-                    if len(last_id_parts) > 1:
-                        try:
-                            current_max_sku_num = int(last_id_parts[-1])
-                            sku_id_counter = current_max_sku_num + 1
-                            logger.info(f"Parsed SKU counter from '{last_id_value}', next counter will be {sku_id_counter}.")
-                        except ValueError:
-                            logger.warning(f"Could not parse numeric counter from last part of ID '{last_id_value}'. Defaulting to 1.")
-                            sku_id_counter = 1 
-                    else:
-                        logger.warning(f"Last ID '{last_id_value}' does not match expected format for counter parsing. Defaulting SKU counter.")
-                else:
-                    logger.debug(f"Last ID cell A{last_id_row} is empty or not found. Defaulting SKU counter to 1.")
-            else: 
-                logger.info(f"No existing data found (last_id_row {last_id_row} <= header_row_index {header_row_index}). Starting SKU counter from 1.")
-                sku_id_counter = 1
-
-        except Exception as e:
-            logger.warning(f"Error determining SKU counter from last ID: {e}. Defaulting sku_id_counter to 1.")
-            sku_id_counter = 1
-
-        logger.info(f"Final sku_id_counter: {sku_id_counter}")
-
-        product_id_template = f"{datetime.datetime.now().strftime('%Y%m%d')}_{product_type}_{{counter:03d}}"
-        logger.debug(f"product_id_template: '{product_id_template}', initial sku_id_counter: {sku_id_counter}")
+        # We'll use a Google Sheets formula for ID generation instead of backend logic
+        # This ensures consecutive numbering regardless of deletions or gaps
+        current_date = datetime.datetime.now().strftime('%Y%m%d')
+        logger.info(f"Using date {current_date} for ID formula in Google Sheets")
 
         main_product_image = ""
         if product_data.get('result', {}).get('result', {}).get('productImage', {}).get('images') and \
@@ -546,18 +513,14 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
             if not price_tiers_to_process: 
                 logger.error(f"No data found in {product_data_path} or file is empty. Cannot determine data to upload.")
             else:
-                logger.debug(f"DEBUG: About to process {len(price_tiers_to_process)} price tiers. Current sku_id_counter: {sku_id_counter}")
+                logger.debug(f"DEBUG: About to process {len(price_tiers_to_process)} price tiers.")
                 for tier_index, tier in enumerate(price_tiers_to_process):
-                    logger.debug(f"DEBUG: Processing tier {tier_index}, sku_id_counter before ID generation: {sku_id_counter}")
-                    product_id_val = product_id_template.format(counter=sku_id_counter)
-                    logger.debug(f"DEBUG: Generated product_id_val: {product_id_val}")
-                    sku_id_counter += 1
+                    logger.debug(f"DEBUG: Processing tier {tier_index}")
                     
                     product_info_str = data.get('result', {}).get('result', {}).get('subjectTrans', data.get('result', {}).get('result', {}).get('subject', 'N/A'))
                     material, material_source = get_material_info(data, product_attributes)
 
                     row_data = {
-                        'id': product_id_val,
                         'image': main_product_image_formula, # Now defined
                         'price1688': tier.get('price1688', 'N/A'),
                         'moq': tier.get('moq', str(product_default_moq)), # Now defined
@@ -579,10 +542,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 product_default_moq = 1
 
             for sku_index, sku in enumerate(product_sku_infos):
-                logger.debug(f"DEBUG: Processing SKU {sku_index}, sku_id_counter before ID generation: {sku_id_counter}")
-                sku_id_val = product_id_template.format(counter=sku_id_counter)
-                logger.debug(f"DEBUG: Generated sku_id_val: {sku_id_val}")
-                sku_id_counter += 1
+                logger.debug(f"DEBUG: Processing SKU {sku_index}")
 
                 sku_attributes_list = sku.get('skuAttributes', [])
                 sku_info_parts = []
@@ -606,7 +566,6 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 material, material_source = get_material_info(data, product_attributes, sku_attributes_list)
 
                 row_data = {
-                    'id': sku_id_val,
                     'image': image_formula,
                     'price1688': str(sku_price),  # Use SKU's own price
                     'moq': str(product_default_moq),  # Use product's default MOQ
@@ -624,9 +583,7 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 fallback_rows = []
                 for tier in price_tiers_to_process:
                     for sku in product_sku_infos:
-                        logger.debug(f"DEBUG: Fallback processing tier {tier} and SKU {sku.get('skuId')} at counter {sku_id_counter}")
-                        sku_id_val = product_id_template.format(counter=sku_id_counter)
-                        sku_id_counter += 1
+                        logger.debug(f"DEBUG: Fallback processing tier {tier} and SKU {sku.get('skuId')}")
                         # build sku_info_str and image formula
                         sku_attributes_list = sku.get('skuAttributes', [])
                         sku_info_parts = []
@@ -642,7 +599,6 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                         # use tier price and moq
                         material, _ = get_material_info(data, product_attributes, sku_attributes_list)
                         row_data = {
-                            'id': sku_id_val,
                             'image': image_formula,
                             'price1688': tier.get('price1688', 'N/A'),
                             'moq': str(tier.get('moq', product_default_moq)),
@@ -689,8 +645,11 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 price_1688 = try_convert_to_float(item_data.get('price1688', ''))
                 price_cust = round(price_1688 * 1.15, 1) if price_1688 != '' else ''
                 
+                # Create formula for consecutive ID generation
+                id_formula = f'="{current_date}_{product_type}_" & TEXT(ROW()-1,"000")'
+                
                 row = [
-                    item_data.get('id', ''),
+                    id_formula,  # Google Sheets formula for consecutive IDs
                     item_data.get('image', ''),
                     price_1688,
                     price_cust,  # Calculated as price_1688 * 1.15, rounded to 1 decimal
