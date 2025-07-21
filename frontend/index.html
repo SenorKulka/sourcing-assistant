@@ -195,8 +195,8 @@
                                     
                                     // Move progress counter after the emoji if present
                                     let finalMessage = displayMessage;
-                                    // Find the first emoji in the message (starts with a non-whitespace character)
-                                    const emojiMatch = displayMessage.match(/^([^\s\w]\s*)(.*)/);
+                                    // Find emojis at the start (including multi-byte Unicode emojis)
+                                    const emojiMatch = displayMessage.match(/^([\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}✅❌⚠️]+\s*)(.*)$/u);
                                     if (emojiMatch) {
                                         // If there's an emoji at the start, insert progress counter after it
                                         const [_, emoji, restOfMessage] = emojiMatch;

@@ -558,9 +558,17 @@ def process_and_upload_data(service, spreadsheet_id, sheet_name, product_data_pa
                 sku_info_str = ", ".join(sku_info_parts) if sku_info_parts else "N/A"
                 image_formula = f'=HYPERLINK("{sku_image_url_for_sku}", IMAGE("{sku_image_url_for_sku}"))' if sku_image_url_for_sku else ""
                 
-                sku_price = sku.get('price')
+                # Extract price from SKU data - try multiple possible fields
+                sku_price = None
+                if sku.get('consignPrice'):
+                    sku_price = sku.get('consignPrice')
+                elif sku.get('fenxiaoPriceInfo', {}).get('offerPrice'):
+                    sku_price = sku.get('fenxiaoPriceInfo', {}).get('offerPrice')
+                elif sku.get('price'):
+                    sku_price = sku.get('price')
+                
                 if sku_price is None:
-                    print(f"DEBUG: SKU {sku.get('skuId', 'N/A')} has no price, skipping.")
+                    print(f"DEBUG: SKU {sku.get('skuId', 'N/A')} has no price (checked consignPrice, fenxiaoPriceInfo.offerPrice, price), skipping.")
                     continue
 
                 material, material_source = get_material_info(data, product_attributes, sku_attributes_list)
