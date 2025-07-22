@@ -11,11 +11,7 @@ This script automates fetching product information from 1688.com product URLs vi
 * Formats the Google Sheet with a frozen header, bolded text, and specific column widths for better readability.
 * Calculates a placeholder profit column in the sheet.
 * Allows filtering of price tiers based on minimum (minmoq) and maximum (maxmoq) order quantities.
-* **Enhanced User Feedback**: Provides detailed processing statistics including product names, SKU counts found, filtered, and uploaded to help track sourcing progress.
-* **Progress Tracking**: Shows real-time progress counters ([1/3], [2/3], etc.) during multi-product processing.
-* **Clickable Product Links**: Product names in results are clickable links that open the source URL in a new tab.
-* **Smart MOQ Filtering**: Automatically handles products with low individual MOQs (< 100) that have product-level pricing tiers.
-* **Multiple Price Field Support**: Extracts prices from various API response fields (consignPrice, fenxiaoPriceInfo.offerPrice, price).
+
 
 ## How It Works
 
